@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS athlete_notes (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS athlete_notes_athlete_id_uidx
+CREATE INDEX IF NOT EXISTS athlete_notes_athlete_id_idx
     ON athlete_notes (athlete_id);
 
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -131,6 +131,15 @@ def main() -> None:
                 cursor.execute(SCHEMA_SQL)
                 cursor.execute(
                     "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS ranking_points INTEGER;"
+                )
+                cursor.execute(
+                    "DROP INDEX IF EXISTS athlete_notes_athlete_id_uidx;"
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS athlete_notes_athlete_id_idx
+                    ON athlete_notes (athlete_id);
+                    """
                 )
                 cursor.execute(
                     """
