@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
+  id-token: write
 
 concurrency:
   group: pages
@@ -18,6 +19,9 @@ jobs:
     name: Build e publicar
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -66,18 +70,21 @@ jobs:
           fi
           echo "Verificação do build OK"
 
-      - name: Publicar na branch gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Publicar artefato
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: flutter_app/build/web
-          publish_branch: gh-pages
-          force_orphan: true
-          commit_message: "Deploy TM Val ${{ github.sha }}"
+          path: flutter_app/build/web
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 
       - name: Smoke test do site publicado
         run: |
-          SITE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          SITE_URL="${{ steps.deployment.outputs.page_url }}"
           echo "Aguardando propagação em $SITE_URL"
           for i in $(seq 1 12); do
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L "$SITE_URL" || echo "000")
@@ -88,5 +95,5 @@ jobs:
             fi
             sleep 15
           done
-          echo "AVISO: smoke test não retornou 200 (pages-build-deployment pode ainda estar em andamento)"
-          exit 0
+          echo "FALHA: smoke test não retornou 200"
+          exit 1
