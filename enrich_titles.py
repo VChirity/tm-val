@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -26,15 +27,20 @@ from title_enrichment import build_championships  # noqa: E402
 
 
 def fetch_card(ittf_id: str) -> dict:
-    r = requests.get(f"{PLAYER_CARD_URL}{ittf_id}", headers=WTT_HEADERS, timeout=60)
-    if r.status_code != 200:
-        return {}
-    details = r.json().get("details")
-    if not details:
-        return {}
-    import json
-
-    return json.loads(details)
+    for attempt in range(3):
+        try:
+            r = requests.get(
+                f"{PLAYER_CARD_URL}{ittf_id}", headers=WTT_HEADERS, timeout=30
+            )
+            if r.status_code != 200:
+                return {}
+            details = r.json().get("details")
+            if not details:
+                return {}
+            return json.loads(details)
+        except requests.RequestException:
+            time.sleep(1.5 * (attempt + 1))
+    return {}
 
 
 def main() -> None:
