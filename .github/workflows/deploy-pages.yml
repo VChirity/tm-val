@@ -43,7 +43,7 @@ jobs:
         run: |
           cd flutter_app
           flutter pub get
-          flutter build web --release --no-wasm --base-href="/${{ github.event.repository.name }}/"
+          flutter build web --release --base-href="/${{ github.event.repository.name }}/"
 
       - name: Configurar GitHub Pages
         uses: actions/configure-pages@v5
