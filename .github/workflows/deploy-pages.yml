@@ -6,18 +6,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
-  id-token: write
 
-# Não cancelar deploy em andamento quando chegar commit novo
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build Flutter Web
+  deploy:
+    name: Build e publicar
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -45,29 +43,20 @@ jobs:
           flutter pub get
           flutter build web --release --base-href="/${{ github.event.repository.name }}/"
 
-      - name: Configurar GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Enviar artefato
-        uses: actions/upload-pages-artifact@v3
+      - name: Publicar na branch gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: flutter_app/build/web
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: flutter_app/build/web
+          publish_branch: gh-pages
+          force_orphan: true
+          commit_message: "Deploy TM Val ${{ github.sha }}"
 
-  deploy:
-    name: Publicar GitHub Pages
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Publicar no GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-        with:
-          # Padrão é 10 min; GitHub Pages às vezes demora mais para concluir
-          timeout: 1200000
-          reporting_interval: 10000
+      - name: Apontar GitHub Pages para gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pages" -X PUT \
+            -f build_type=legacy \
+            -f 'source[branch]=gh-pages' \
+            -f 'source[path]=/' || true
