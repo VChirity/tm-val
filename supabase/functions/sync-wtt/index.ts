@@ -19,6 +19,19 @@ const PLAYER_CARD_URL =
 
 const WIKI_HEADERS = { "User-Agent": "TM-Val/1.0 (tm-val-app)" };
 
+const MEDAL_PT: Record<string, string> = {
+  Gold: "Ouro",
+  Silver: "Prata",
+  Bronze: "Bronze",
+};
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+};
+
 function parseInt(value: unknown): number | null {
   if (value == null || value === "") return null;
   const n = Number.parseFloat(String(value));
@@ -39,9 +52,88 @@ function splitTournamentList(value: string): string[] {
   return value.split(/,\s*|\t|\n/).map((p) => p.trim()).filter(Boolean);
 }
 
-function extractYear(title: string): number | null {
-  const m = title.match(/\b(19|20)\d{2}\b/);
-  return m ? Number.parseInt(m[0], 10) : null;
+function cleanWikiText(value: string): string {
+  return value
+    .replace(/\[\[[^|\]]+\|([^\]]+)\]\]/g, "$1")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\{\{CHN\}\}/gi, "China")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitWikiParams(text: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let linkDepth = 0;
+  for (const ch of text) {
+    if (ch === "[") linkDepth++;
+    else if (ch === "]") linkDepth = Math.max(0, linkDepth - 1);
+    else if (ch === "|" && linkDepth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+  return parts;
+}
+
+function extractMedalTemplates(
+  wikitext: string,
+): Array<{ place: string; params: string[] }> {
+  const results: Array<{ place: string; params: string[] }> = [];
+  const opener = /\{\{(Medal(?:Gold|Silver|Bronze))\|/gi;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(wikitext)) !== null) {
+    let depth = 2;
+    let i = match.index + match[0].length;
+    let content = "";
+    while (i < wikitext.length) {
+      if (wikitext.startsWith("{{", i)) {
+        depth += 2;
+        content += "{{";
+        i += 2;
+        continue;
+      }
+      if (wikitext.startsWith("}}", i)) {
+        depth -= 2;
+        if (depth === 0) break;
+        content += "}}";
+        i += 2;
+        continue;
+      }
+      content += wikitext[i++];
+    }
+    const medalType = match[1];
+    const place = medalType.replace(/^Medal/i, "");
+    results.push({ place, params: splitWikiParams(content) });
+  }
+  return results;
+}
+
+function translateHighlight(text: string): string {
+  const replacements: Record<string, string> = {
+    "Singles titles:": "Títulos em simples:",
+    "Doubles titles:": "Títulos em duplas:",
+    "Career titles:": "Títulos na carreira:",
+    " singles:": " simples:",
+    " doubles:": " duplas:",
+    " mixed:": " mista:",
+    Winner: "Campeão",
+    Champion: "Campeão",
+    Team: "Equipe",
+    Singles: "Simples",
+    Doubles: "Duplas",
+    "Mixed doubles": "Duplas mistas",
+    "Mixed team": "Equipe mista",
+  };
+  let out = text;
+  for (const [src, dst] of Object.entries(replacements)) {
+    out = out.replaceAll(src, dst);
+  }
+  return out;
 }
 
 function titlesFromCard(card: Record<string, unknown>): string[] {
@@ -90,57 +182,117 @@ function titlesFromCard(card: Record<string, unknown>): string[] {
   return titles;
 }
 
-function needsWiki(cardTitles: string[]): boolean {
-  return !cardTitles.some((t) => {
-    const y = extractYear(t);
-    return y != null && y >= 2022;
-  });
+function extractYear(title: string): number | null {
+  const m = title.match(/\b(19|20)\d{2}\b/);
+  return m ? Number.parseInt(m[0], 10) : null;
+}
+
+function yearFromParts(...parts: string[]): string | null {
+  for (const part of parts) {
+    if (!part) continue;
+    const m = part.match(/\b(19|20)\d{2}\b/);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+async function wikiPageTitle(playerName: string): Promise<string | null> {
+  const searchUrl = new URL("https://en.wikipedia.org/w/api.php");
+  searchUrl.searchParams.set("action", "query");
+  searchUrl.searchParams.set("list", "search");
+  searchUrl.searchParams.set("srsearch", `${playerName} table tennis`);
+  searchUrl.searchParams.set("srlimit", "5");
+  searchUrl.searchParams.set("format", "json");
+
+  const searchResp = await fetch(searchUrl, { headers: WIKI_HEADERS });
+  if (!searchResp.ok) return null;
+  const hits = (await searchResp.json())?.query?.search ?? [];
+  if (!hits.length) return null;
+
+  const family = playerName.split(" ").pop()?.toLowerCase() ?? "";
+  for (const hit of hits) {
+    const title = String(hit.title ?? "");
+    if (family && title.toLowerCase().includes(family)) return title;
+  }
+  return String(hits[0].title);
 }
 
 async function titlesFromWiki(playerName: string): Promise<string[]> {
   if (!playerName.trim()) return [];
   try {
-    const searchUrl = new URL("https://en.wikipedia.org/w/api.php");
-    searchUrl.searchParams.set("action", "query");
-    searchUrl.searchParams.set("list", "search");
-    searchUrl.searchParams.set("srsearch", `${playerName} table tennis`);
-    searchUrl.searchParams.set("srlimit", "2");
-    searchUrl.searchParams.set("format", "json");
-
-    const searchResp = await fetch(searchUrl, { headers: WIKI_HEADERS });
-    if (!searchResp.ok) return [];
-    const searchData = await searchResp.json();
-    const hits = searchData?.query?.search ?? [];
-    if (!hits.length) return [];
+    const page = await wikiPageTitle(playerName);
+    if (!page) return [];
 
     const parseUrl = new URL("https://en.wikipedia.org/w/api.php");
     parseUrl.searchParams.set("action", "parse");
-    parseUrl.searchParams.set("page", hits[0].title);
+    parseUrl.searchParams.set("page", page);
     parseUrl.searchParams.set("prop", "wikitext");
     parseUrl.searchParams.set("format", "json");
 
     const parseResp = await fetch(parseUrl, { headers: WIKI_HEADERS });
     if (!parseResp.ok) return [];
-    const parseData = await parseResp.json();
-    const text = parseData?.parse?.wikitext?.["*"] as string | undefined;
+    const text = (await parseResp.json())?.parse?.wikitext?.["*"] as
+      | string
+      | undefined;
     if (!text) return [];
 
     const titles: string[] = [];
-    for (const block of text.matchAll(/\{\{Med(?:al|alCompetition)[^}]*\}\}/gis)) {
-      const b = block[0];
-      const year = b.match(/year\s*=\s*([^|\n}]+)/i)?.[1]?.trim();
-      const comp = b.match(/competition\s*=\s*([^|\n}]+)/i)?.[1]?.trim();
-      const event = b.match(/event\s*=\s*([^|\n}]+)/i)?.[1]?.trim();
-      const place = b.match(/\b(Gold|Silver|Bronze)\b/i)?.[1];
-      if (!comp || !place) continue;
-      let line = `${year ?? "?"} ${place} — ${comp}`;
-      if (event) line += ` (${event})`;
+    for (const { place, params } of extractMedalTemplates(text)) {
+      const medal = MEDAL_PT[place] ?? place;
+      const rawCombined = params.join(" ");
+      const part1 = params[0] ? cleanWikiText(params[0]) : "";
+      const part2 = params[1] ? cleanWikiText(params[1]) : "";
+      const year = yearFromParts(part1, part2, rawCombined) ?? "?";
+
+      let comp: string;
+      let event: string;
+      if (/olympic|jogos ol|summer youth/i.test(rawCombined)) {
+        comp = "Olimpíadas";
+        event = part2 || part1;
+      } else if (part2) {
+        comp = part1;
+        event = part2;
+      } else {
+        comp = part1;
+        event = "";
+      }
+
+      let line = `${year} ${medal} — ${translateHighlight(comp)}`;
+      if (event) line += ` (${translateHighlight(event)})`;
       titles.push(line);
     }
+
+    for (const line of text.split("\n")) {
+      const stripped = line.trim();
+      if (!stripped.startsWith("*")) continue;
+      if (
+        !/WTT|World Championship|Olympic|Grand Smash|Singapore Smash|Contender|Cup Finals|Asian Championship|World Cup|Olimp/i
+          .test(stripped)
+      ) continue;
+      const clean = cleanWikiText(stripped.replace(/^\*\s*/, ""));
+      if (/\b(19|20)\d{2}\b/.test(clean)) {
+        titles.push(translateHighlight(clean));
+      }
+    }
+
     return titles;
   } catch {
     return [];
   }
+}
+
+function sortTitlesByYear(titles: string[]): string[] {
+  const summary = titles.filter((t) =>
+    t.includes("Títulos em") || t.includes("Títulos na carreira") ||
+    t.includes("Singles titles:") || t.includes("Career titles:")
+  );
+  const rest = titles.filter((t) => !summary.includes(t));
+  rest.sort((a, b) => {
+    const ya = extractYear(a) ?? 0;
+    const yb = extractYear(b) ?? 0;
+    return yb - ya || a.localeCompare(b);
+  });
+  return [...summary, ...rest];
 }
 
 function mergeUnique(...lists: string[][]): string[] {
@@ -148,7 +300,7 @@ function mergeUnique(...lists: string[][]): string[] {
   const out: string[] = [];
   for (const list of lists) {
     for (const item of list) {
-      const t = item.trim();
+      const t = translateHighlight(item.trim());
       if (!t || seen.has(t)) continue;
       seen.add(t);
       out.push(t);
@@ -184,12 +336,7 @@ async function wttGet(url: string): Promise<Response> {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, content-type, apikey",
-      },
-    });
+    return new Response(null, { headers: corsHeaders });
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -254,9 +401,7 @@ Deno.serve(async (req: Request) => {
 
         const name = String(row.PlayerName ?? profile.PlayerName ?? "");
         const cardTitles = titlesFromCard(card);
-        const wikiTitles = needsWiki(cardTitles)
-          ? await titlesFromWiki(name)
-          : [];
+        const wikiTitles = await titlesFromWiki(name);
 
         const photo = profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL;
         const record: Record<string, unknown> = {
@@ -270,7 +415,9 @@ Deno.serve(async (req: Request) => {
           age: parseInt(profile.Age ?? row.Age),
           height: parseFloat(card.Height ?? profile.Height),
           hand: profile.Handedness ?? card.Hand ?? null,
-          championships_won: mergeUnique(cardTitles, wikiTitles),
+          championships_won: sortTitlesByYear(
+            mergeUnique(cardTitles, wikiTitles),
+          ),
           photo_url: photo
             ? String(photo)
               .replace(
@@ -309,6 +456,7 @@ Deno.serve(async (req: Request) => {
       }),
       {
         headers: {
+          ...corsHeaders,
           "Content-Type": "application/json",
           "Connection": "keep-alive",
         },
@@ -318,7 +466,10 @@ Deno.serve(async (req: Request) => {
     const message = error instanceof Error ? error.message : String(error);
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+      },
     });
   }
 });

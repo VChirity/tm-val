@@ -12,14 +12,26 @@ const WTT_HEADERS = {
 const H2H_URL =
   "https://wttcmsapigateway-new.azure-api.net/ttu/Players/GetPlayersHeadToHead";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+    },
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, content-type, apikey",
-      },
-    });
+    return new Response(null, { headers: corsHeaders });
   }
 
   try {
@@ -39,10 +51,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!player1 || !player2) {
-      return new Response(JSON.stringify({ error: "player1 e player2 obrigatórios" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "player1 e player2 obrigatórios" }, 400);
     }
 
     const apiUrl = new URL(H2H_URL);
@@ -55,15 +64,9 @@ Deno.serve(async (req: Request) => {
     const response = await fetch(apiUrl, { headers: WTT_HEADERS });
     const payload = await response.json();
 
-    return new Response(JSON.stringify(payload), {
-      status: response.status,
-      headers: { "Content-Type": "application/json" },
-    });
+    return jsonResponse(payload, response.status);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return new Response(JSON.stringify({ error: message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: message }, 500);
   }
 });

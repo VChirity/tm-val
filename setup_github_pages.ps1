@@ -89,10 +89,10 @@ Write-Host "==> Configurando secrets do Actions..." -ForegroundColor Cyan
 $supabaseUrl | & $gh secret set SUPABASE_URL --repo "$owner/$repo"
 $supabaseAnon | & $gh secret set SUPABASE_ANON_KEY --repo "$owner/$repo"
 
-Write-Host "==> Ativando GitHub Pages (GitHub Actions)..." -ForegroundColor Cyan
-& $gh api "repos/$owner/$repo/pages" -X POST -f build_type=workflow 2>$null | Out-Null
+Write-Host "==> Ativando GitHub Pages (branch gh-pages)..." -ForegroundColor Cyan
+& $gh api "repos/$owner/$repo/pages" -X POST -f build_type=legacy -f 'source[branch]=gh-pages' -f 'source[path]=/' 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    & $gh api "repos/$owner/$repo/pages" -X PUT -f build_type=workflow 2>$null | Out-Null
+    & $gh api "repos/$owner/$repo/pages" -X PUT -f build_type=legacy -f 'source[branch]=gh-pages' -f 'source[path]=/' 2>$null | Out-Null
 }
 
 Write-Host "Deploy iniciado pelo push. Aguarde o workflow no GitHub Actions." -ForegroundColor Yellow

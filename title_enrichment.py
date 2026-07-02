@@ -12,6 +12,9 @@ WIKI_HEADERS = {"User-Agent": "TM-Val/1.0 (tm-val-app; contact@colegioequacao.co
 
 MEDAL_PT = {"Gold": "Ouro", "Silver": "Prata", "Bronze": "Bronze"}
 
+_YEAR_IN_TEXT = re.compile(r"\b(19|20)\d{2}\b")
+_WIKI_LINK = re.compile(r"\[\[([^|\]]+\|)?([^\]]+)\]\]")
+
 
 def translate_highlight(text: str) -> str:
     replacements = {
@@ -23,15 +26,88 @@ def translate_highlight(text: str) -> str:
         " mixed:": " mista:",
         "Winner": "Campeão",
         "Champion": "Campeão",
+        "Team": "Equipe",
+        "Singles": "Simples",
+        "Doubles": "Duplas",
+        "Mixed doubles": "Duplas mistas",
+        "Mixed team": "Equipe mista",
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
     return text
 
 
+def clean_wiki_text(value: str) -> str:
+    text = _WIKI_LINK.sub(r"\2", value)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = text.replace("{{CHN}}", "China")
+    text = text.replace("{{chn}}", "China")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def year_from_parts(*parts: str) -> str | None:
+    for part in parts:
+        if not part:
+            continue
+        match = _YEAR_IN_TEXT.search(part)
+        if match:
+            return match.group(0)
+    return None
+
+
 def _split_tournament_list(value: str) -> list[str]:
     parts = re.split(r",\s*|\t|\n", value)
     return [p.strip() for p in parts if p.strip()]
+
+
+def _split_wiki_params(text: str) -> list[str]:
+    """Divide parâmetros de template por |, ignorando pipes dentro de [[links]]."""
+    parts: list[str] = []
+    current: list[str] = []
+    link_depth = 0
+    for ch in text:
+        if ch == "[":
+            link_depth += 1
+        elif ch == "]":
+            link_depth = max(0, link_depth - 1)
+        elif ch == "|" and link_depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _extract_medal_templates(wikitext: str) -> list[tuple[str, list[str]]]:
+    """Extrai {{MedalGold|...}}, {{MedalSilver|...}} etc. com pipes aninhados."""
+    results: list[tuple[str, list[str]]] = []
+    opener = re.compile(r"\{\{(Medal(?:Gold|Silver|Bronze))\|", re.I)
+    for match in opener.finditer(wikitext):
+        depth = 2
+        i = match.end()
+        content: list[str] = []
+        while i < len(wikitext):
+            if wikitext.startswith("{{", i):
+                depth += 2
+                content.append("{{")
+                i += 2
+                continue
+            if wikitext.startswith("}}", i):
+                depth -= 2
+                if depth == 0:
+                    break
+                content.append("}}")
+                i += 2
+                continue
+            content.append(wikitext[i])
+            i += 1
+
+        medal_type = match.group(1)
+        place = medal_type.replace("Medal", "", 1)
+        params = _split_wiki_params("".join(content))
+        results.append((place, params))
+    return results
 
 
 def titles_from_player_card(card: dict[str, Any]) -> list[str]:
@@ -84,27 +160,39 @@ def titles_from_player_card(card: dict[str, Any]) -> list[str]:
     return titles
 
 
+def _wiki_page_title(player_name: str) -> str | None:
+    search = requests.get(
+        "https://en.wikipedia.org/w/api.php",
+        headers=WIKI_HEADERS,
+        params={
+            "action": "query",
+            "list": "search",
+            "srsearch": f"{player_name} table tennis",
+            "srlimit": 5,
+            "format": "json",
+        },
+        timeout=15,
+    )
+    search.raise_for_status()
+    hits = search.json().get("query", {}).get("search", [])
+    if not hits:
+        return None
+
+    family = player_name.split()[-1].lower() if player_name.split() else ""
+    for hit in hits:
+        title = hit.get("title", "")
+        if family and family in title.lower():
+            return title
+    return hits[0]["title"]
+
+
 def titles_from_wikipedia(player_name: str) -> list[str]:
     titles: list[str] = []
     try:
-        search = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            headers=WIKI_HEADERS,
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": f"{player_name} table tennis",
-                "srlimit": 3,
-                "format": "json",
-            },
-            timeout=12,
-        )
-        search.raise_for_status()
-        hits = search.json().get("query", {}).get("search", [])
-        if not hits:
+        page = _wiki_page_title(player_name)
+        if not page:
             return titles
 
-        page = hits[0]["title"]
         parse_resp = requests.get(
             "https://en.wikipedia.org/w/api.php",
             headers=WIKI_HEADERS,
@@ -114,25 +202,31 @@ def titles_from_wikipedia(player_name: str) -> list[str]:
                 "prop": "wikitext",
                 "format": "json",
             },
-            timeout=12,
+            timeout=20,
         )
         parse_resp.raise_for_status()
         wikitext = parse_resp.json()["parse"]["wikitext"]["*"]
 
-        for block in re.findall(r"\{\{Med(?:al|alCompetition)[^}]*\}\}", wikitext, re.S):
-            year_m = re.search(r"year\s*=\s*([^|\n}]+)", block, re.I)
-            comp_m = re.search(r"competition\s*=\s*([^|\n}]+)", block, re.I)
-            event_m = re.search(r"event\s*=\s*([^|\n}]+)", block, re.I)
-            place_m = re.search(r"\b(Gold|Silver|Bronze)\b", block, re.I)
-            if not (comp_m and place_m):
-                continue
-            year = year_m.group(1).strip() if year_m else "?"
-            comp = comp_m.group(1).strip()
-            place = MEDAL_PT.get(place_m.group(1), place_m.group(1))
-            event = event_m.group(1).strip() if event_m else ""
-            line = f"{year} {place} — {comp}"
+        for medal_place, params in _extract_medal_templates(wikitext):
+            place = MEDAL_PT.get(medal_place.title(), medal_place)
+            raw_combined = " ".join(params)
+            part1 = clean_wiki_text(params[0]) if params else ""
+            part2 = clean_wiki_text(params[1]) if len(params) > 1 else ""
+            year = year_from_parts(part1, part2, raw_combined) or "?"
+
+            if re.search(r"olympic|jogos ol|summer youth", raw_combined, re.I):
+                event = part2 or part1
+                comp = "Olimpíadas"
+            elif part2:
+                event = part2
+                comp = part1
+            else:
+                event = ""
+                comp = part1
+
+            line = f"{year} {place} — {translate_highlight(comp)}"
             if event:
-                line += f" ({event})"
+                line += f" ({translate_highlight(event)})"
             titles.append(line)
 
         for line in wikitext.split("\n"):
@@ -141,18 +235,14 @@ def titles_from_wikipedia(player_name: str) -> list[str]:
                 continue
             if not re.search(
                 r"WTT|World Championship|Olympic|Grand Smash|Singapore Smash|"
-                r"Contender|Cup Finals|Asian Championship|World Cup",
+                r"Contender|Cup Finals|Asian Championship|World Cup|Olimp",
                 stripped,
                 re.I,
             ):
                 continue
-            clean = re.sub(r"\[\[([^|\]]+\|)?([^\]]+)\]\]", r"\2", stripped)
-            clean = re.sub(r"<[^>]+>", "", clean).strip("* ").strip()
-            year_m = re.match(r"(\d{4})\s*[—–-]?\s*", clean)
-            if year_m:
-                titles.append(clean)
-            elif re.search(r"\b(19|20)\d{2}\b", clean):
-                titles.append(clean)
+            clean = clean_wiki_text(stripped.lstrip("* ").strip())
+            if _YEAR_IN_TEXT.search(clean):
+                titles.append(translate_highlight(clean))
 
     except requests.RequestException:
         pass
@@ -173,7 +263,18 @@ def merge_titles(*sources: list[str]) -> list[str]:
     return merged
 
 
+def sort_titles_by_year(titles: list[str]) -> list[str]:
+    def sort_key(title: str) -> tuple[int, str]:
+        year = year_from_parts(title) or "0000"
+        return (int(year) if year.isdigit() else 0, title)
+
+    summary = [t for t in titles if "Títulos em" in t or "Títulos na carreira" in t]
+    rest = [t for t in titles if t not in summary]
+    rest.sort(key=sort_key, reverse=True)
+    return summary + rest
+
+
 def build_championships(card: dict[str, Any], player_name: str) -> list[str]:
     card_titles = titles_from_player_card(card)
     wiki_titles = titles_from_wikipedia(player_name)
-    return merge_titles(card_titles, wiki_titles)
+    return sort_titles_by_year(merge_titles(card_titles, wiki_titles))
