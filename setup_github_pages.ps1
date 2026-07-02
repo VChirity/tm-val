@@ -38,10 +38,14 @@ for path in [Path(r'$root/.env'), Path(r'$root/flutter_app/assets/.env')]:
 }
 
 Write-Host "==> Autenticando no GitHub..." -ForegroundColor Cyan
-$token = Get-GitHubToken
-$token | & $gh auth login --with-token | Out-Null
+$env:GH_TOKEN = Get-GitHubToken
+$ghUser = & $gh api user -q .login
+if (-not $ghUser) {
+    throw "Nao foi possivel autenticar no GitHub."
+}
+Write-Host "Conta: $ghUser" -ForegroundColor DarkGray
 
-$owner = "VChirity"
+$owner = $ghUser
 $repo = "tm-val"
 
 Write-Host "==> Lendo credenciais Supabase..." -ForegroundColor Cyan
