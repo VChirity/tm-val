@@ -3,10 +3,10 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-Lib/
-Scripts/
-include/
-pyvenv.cfg
+/Scripts/
+/include/
+/pyvenv.cfg
+/Lib/
 _probe_*.py
 _probe_*.txt
 _rank.bin

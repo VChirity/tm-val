@@ -90,16 +90,12 @@ $supabaseUrl | & $gh secret set SUPABASE_URL --repo "$owner/$repo"
 $supabaseAnon | & $gh secret set SUPABASE_ANON_KEY --repo "$owner/$repo"
 
 Write-Host "==> Ativando GitHub Pages (GitHub Actions)..." -ForegroundColor Cyan
-& $gh api "repos/$owner/$repo/pages" -X PUT -f build_type=workflow 2>$null
+& $gh api "repos/$owner/$repo/pages" -X POST -f build_type=workflow 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    & $gh api "repos/$owner/$repo/pages" -X POST -f build_type=workflow
+    & $gh api "repos/$owner/$repo/pages" -X PUT -f build_type=workflow 2>$null | Out-Null
 }
 
-Write-Host "==> Disparando deploy..." -ForegroundColor Cyan
-& $gh workflow run "Deploy TM Val (Flutter Web)" --repo "$owner/$repo" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "O workflow rodara automaticamente apos o push." -ForegroundColor Yellow
-}
+Write-Host "Deploy iniciado pelo push. Aguarde o workflow no GitHub Actions." -ForegroundColor Yellow
 
 $pagesUrl = "https://$owner.github.io/$repo/"
 Write-Host ""
