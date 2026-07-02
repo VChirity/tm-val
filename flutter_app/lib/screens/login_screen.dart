@@ -78,10 +78,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(
-                        Icons.sports_tennis,
-                        size: 56,
-                        color: theme.colorScheme.primary,
+                      Image.asset(
+                        'assets/tm_val_logo.png',
+                        width: 88,
+                        height: 88,
                       ),
                       const SizedBox(height: 16),
                       Text(

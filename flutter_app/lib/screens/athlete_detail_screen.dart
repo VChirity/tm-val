@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../models/athlete.dart';
 import '../models/athlete_note.dart';
 import '../services/athlete_repository.dart';
+import '../utils/pt_br.dart';
 import '../widgets/athlete_photo.dart';
 
 class AthleteDetailScreen extends StatefulWidget {
@@ -175,7 +176,10 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(
+        horizontal: MediaQuery.sizeOf(context).width < 520 ? 12 : 16,
+        vertical: 16,
+      ),
       children: [
         Center(
           child: AthletePhoto.hero(photoUrl: athlete.photoUrl),
@@ -190,7 +194,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Ranking #${athlete.ranking}',
+          'Ranking #${athlete.ranking} • ${PtBr.formatRankingPoints(athlete.rankingPoints)}',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleMedium,
         ),
@@ -208,11 +212,15 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
                 const Divider(),
                 _buildInfoRow(
                   'Gênero',
-                  athlete.gender == 'male' ? 'Masculino' : 'Feminino',
+                  PtBr.genderLabel(athlete.gender),
+                ),
+                _buildInfoRow(
+                  'Pontuação',
+                  PtBr.formatRankingPoints(athlete.rankingPoints),
                 ),
                 _buildInfoRow(
                   'Idade',
-                  athlete.age?.toString() ?? 'Não informada',
+                  PtBr.formatAge(athlete.age),
                 ),
                 _buildInfoRow(
                   'Altura',
@@ -222,7 +230,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
                 ),
                 _buildInfoRow(
                   'Mão',
-                  athlete.hand ?? 'Não informada',
+                  PtBr.handLabel(athlete.hand),
                 ),
                 if (athlete.updatedAt != null)
                   _buildInfoRow(
@@ -253,7 +261,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text('• '),
-                          Expanded(child: Text(title)),
+                          Expanded(child: Text(PtBr.translateHighlight(title))),
                         ],
                       ),
                     ),

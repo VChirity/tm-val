@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS athletes (
     name TEXT NOT NULL,
     gender TEXT NOT NULL CHECK (gender IN ('male', 'female')),
     ranking INTEGER NOT NULL,
+    ranking_points INTEGER,
     age INTEGER,
     height DOUBLE PRECISION,
     hand TEXT,
@@ -128,6 +129,9 @@ def main() -> None:
             conn.autocommit = True
             with conn.cursor() as cursor:
                 cursor.execute(SCHEMA_SQL)
+                cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS ranking_points INTEGER;"
+                )
                 cursor.execute(
                     """
                     SELECT table_name

@@ -1,66 +1,98 @@
-import 'package:flutter/material.dart';
-
-import '../models/athlete.dart';
-import 'athlete_photo.dart';
-
-class AthleteListTile extends StatelessWidget {
-  const AthleteListTile({
-    super.key,
-    required this.athlete,
-    required this.onTap,
-  });
-
-  final Athlete athlete;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: ListTile(
-        onTap: onTap,
-        leading: AthletePhoto.thumbnail(photoUrl: athlete.photoUrl),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                '#${athlete.ranking}',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                athlete.name,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            if (athlete.hasNote)
-              Tooltip(
-                message: 'Possui anotação da Valesca',
-                child: Icon(
-                  Icons.sticky_note_2,
-                  color: theme.colorScheme.tertiary,
-                ),
-              ),
-          ],
-        ),
-        subtitle: Text(
-          athlete.age != null ? '${athlete.age} anos' : 'Idade não informada',
-        ),
-        trailing: const Icon(Icons.chevron_right),
-      ),
-    );
-  }
-}
+import 'package:flutter/material.dart';
+
+import '../models/athlete.dart';
+import '../utils/pt_br.dart';
+import 'athlete_photo.dart';
+
+class AthleteListTile extends StatelessWidget {
+  const AthleteListTile({
+    super.key,
+    required this.athlete,
+    required this.onTap,
+  });
+
+  final Athlete athlete;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            children: [
+              AthletePhoto.thumbnail(photoUrl: athlete.photoUrl),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '#${athlete.ranking}',
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            athlete.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (athlete.hasNote)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: Icon(
+                              Icons.sticky_note_2,
+                              size: 20,
+                              color: theme.colorScheme.tertiary,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      PtBr.formatRankingPoints(athlete.rankingPoints),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+

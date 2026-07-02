@@ -255,6 +255,9 @@ class WttSyncService {
       'ranking': _parseInt(
         rankingRow['CurrentRank'] ?? rankingRow['RankingPosition'],
       ),
+      'ranking_points': _parseInt(
+        rankingRow['RankingPointsYTD'] ?? rankingRow['RankingPointsCareer'],
+      ),
       'age': _parseInt(profile['Age'] ?? rankingRow['Age']),
       'height': _parseDouble(card['Height'] ?? profile['Height']),
       'hand': profile['Handedness'] ?? card['Hand'],
@@ -270,10 +273,10 @@ class WttSyncService {
     final singles = card['singles_titles'];
     final doubles = card['doubles_titles'];
     if (singles != null && '$singles'.isNotEmpty) {
-      titles.add('Singles titles: $singles');
+      titles.add(_translateHighlight('Singles titles: $singles'));
     }
     if (doubles != null && '$doubles'.isNotEmpty) {
-      titles.add('Doubles titles: $doubles');
+      titles.add(_translateHighlight('Doubles titles: $doubles'));
     }
 
     final statsRaw = card['stats'];
@@ -285,7 +288,7 @@ class WttSyncService {
         final careerTitles =
             stats['career_titles'] ?? stats['tournament_wins'];
         if (careerTitles != null) {
-          titles.add('Career titles: $careerTitles');
+          titles.add(_translateHighlight('Career titles: $careerTitles'));
         }
       } catch (_) {}
     }
@@ -302,7 +305,7 @@ class WttSyncService {
           for (final key in ['singles', 'doubles', 'mixed']) {
             final value = map[key];
             if (value != null && '$value'.isNotEmpty) {
-              titles.add('$year $key: $value');
+              titles.add(_translateHighlight('$year $key: $value'));
             }
           }
         }
@@ -314,6 +317,23 @@ class WttSyncService {
     }
 
     return titles.take(20).toList();
+  }
+
+  String _translateHighlight(String text) {
+    const replacements = {
+      'Singles titles:': 'Títulos em simples:',
+      'Doubles titles:': 'Títulos em duplas:',
+      'Career titles:': 'Títulos na carreira:',
+      ' singles:': ' simples:',
+      ' doubles:': ' duplas:',
+      ' mixed:': ' mista:',
+    };
+
+    var translated = text;
+    for (final entry in replacements.entries) {
+      translated = translated.replaceAll(entry.key, entry.value);
+    }
+    return translated;
   }
 
   String? _normalizePhotoUrl(String? url) {

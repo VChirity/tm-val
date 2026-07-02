@@ -77,6 +77,7 @@ class TmValApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
       home: const AuthGate(),
     );

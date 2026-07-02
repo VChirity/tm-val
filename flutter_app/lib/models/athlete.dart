@@ -4,6 +4,7 @@ class Athlete {
     required this.name,
     required this.gender,
     required this.ranking,
+    this.rankingPoints,
     this.age,
     this.height,
     this.hand,
@@ -17,6 +18,7 @@ class Athlete {
   final String name;
   final String gender;
   final int ranking;
+  final int? rankingPoints;
   final int? age;
   final double? height;
   final String? hand;
@@ -32,6 +34,7 @@ class Athlete {
       name: json['name'] as String,
       gender: json['gender'] as String,
       ranking: json['ranking'] as int,
+      rankingPoints: json['ranking_points'] as int?,
       age: json['age'] as int?,
       height: (json['height'] as num?)?.toDouble(),
       hand: json['hand'] as String?,
@@ -52,6 +55,7 @@ class Athlete {
       'name': name,
       'gender': gender,
       'ranking': ranking,
+      'ranking_points': rankingPoints,
       'age': age,
       'height': height,
       'hand': hand,
@@ -67,6 +71,7 @@ class Athlete {
       name: name,
       gender: gender,
       ranking: ranking,
+      rankingPoints: rankingPoints,
       age: age,
       height: height,
       hand: hand,

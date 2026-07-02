@@ -61,6 +61,7 @@ flutter:
 
   assets:
     - assets/.env
+    - assets/tm_val_logo.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

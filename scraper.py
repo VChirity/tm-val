@@ -39,6 +39,7 @@ TTU_PLAYERS_URL = (
 PLAYER_CARD_URL = (
     "https://wtt-website-api-prod-3-frontdoor-bddnb2haduafdze9.a01.azurefd.net/api/cms/PlayerCard/"
 )
+PHOTOS_BUCKET = "athlete-photos"
 
 GENDER_MAP = {
     "MS": "male",
@@ -143,15 +144,29 @@ def fetch_player_card(ittf_id: str) -> dict[str, Any]:
         return {}
 
 
+def translate_highlight(text: str) -> str:
+    replacements = {
+        "Singles titles:": "Títulos em simples:",
+        "Doubles titles:": "Títulos em duplas:",
+        "Career titles:": "Títulos na carreira:",
+        " singles:": " simples:",
+        " doubles:": " duplas:",
+        " mixed:": " mista:",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text
+
+
 def build_championships(card: dict[str, Any]) -> list[str]:
     titles: list[str] = []
 
     singles = card.get("singles_titles")
     doubles = card.get("doubles_titles")
     if singles:
-        titles.append(f"Singles titles: {singles}")
+        titles.append(translate_highlight(f"Singles titles: {singles}"))
     if doubles:
-        titles.append(f"Doubles titles: {doubles}")
+        titles.append(translate_highlight(f"Doubles titles: {doubles}"))
 
     stats_raw = card.get("stats")
     if stats_raw:
@@ -159,7 +174,9 @@ def build_championships(card: dict[str, Any]) -> list[str]:
             stats = json.loads(stats_raw) if isinstance(stats_raw, str) else stats_raw
             career_titles = stats.get("career_titles") or stats.get("tournament_wins")
             if career_titles:
-                titles.append(f"Career titles: {career_titles}")
+                titles.append(
+                    translate_highlight(f"Career titles: {career_titles}")
+                )
         except json.JSONDecodeError:
             pass
 
@@ -176,7 +193,9 @@ def build_championships(card: dict[str, Any]) -> list[str]:
                 for key in ("singles", "doubles", "mixed"):
                     value = item.get(key)
                     if value:
-                        titles.append(f"{year} {key}: {value}")
+                        titles.append(
+                            translate_highlight(f"{year} {key}: {value}")
+                        )
         except json.JSONDecodeError:
             pass
 
@@ -210,6 +229,10 @@ def build_athlete_record(
         "name": ranking_row.get("PlayerName") or profile.get("PlayerName"),
         "gender": gender,
         "ranking": parse_int(ranking_row.get("CurrentRank") or ranking_row.get("RankingPosition")),
+        "ranking_points": parse_int(
+            ranking_row.get("RankingPointsYTD")
+            or ranking_row.get("RankingPointsCareer")
+        ),
         "age": age,
         "height": height,
         "hand": hand,
@@ -231,7 +254,69 @@ def collect_gender_rankings(
     return filtered[:limit]
 
 
-def scrape_top100() -> list[dict[str, Any]]:
+def slugify_name(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "-" for ch in name.lower())
+    while "--" in safe:
+        safe = safe.replace("--", "-")
+    return safe.strip("-") or "atleta"
+
+
+def ensure_photos_bucket(client: Client) -> None:
+    try:
+        buckets = client.storage.list_buckets()
+        names = {bucket.name for bucket in buckets}
+        if PHOTOS_BUCKET in names:
+            return
+    except Exception:
+        pass
+
+    try:
+        client.storage.create_bucket(PHOTOS_BUCKET, options={"public": True})
+    except Exception:
+        pass
+
+
+def mirror_photo_to_storage(
+    client: Client,
+    gender: str,
+    name: str,
+    photo_url: str | None,
+) -> str | None:
+    if not photo_url:
+        return None
+
+    try:
+        response = requests.get(photo_url, headers=WTT_HEADERS, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException:
+        return photo_url
+
+    content_type = response.headers.get("Content-Type", "image/jpeg").split(";")[0]
+    extension = "jpg"
+    if "png" in content_type:
+        extension = "png"
+    elif "webp" in content_type:
+        extension = "webp"
+
+    path = f"{gender}/{slugify_name(name)}.{extension}"
+    try:
+        client.storage.from_(PHOTOS_BUCKET).upload(
+            path,
+            response.content,
+            file_options={
+                "content-type": content_type,
+                "upsert": "true",
+                "cache-control": "31536000",
+            },
+        )
+    except Exception:
+        return photo_url
+
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    return f"{base}/storage/v1/object/public/{PHOTOS_BUCKET}/{path}"
+
+
+def scrape_top100(client: Client) -> list[dict[str, Any]]:
     print("Buscando rankings SEN Singles na WTT...")
     all_rankings = fetch_rankings()
     targets = [
@@ -262,7 +347,14 @@ def scrape_top100() -> list[dict[str, Any]]:
                     print(f"      Aviso: ficha indisponível ({exc})")
                 time.sleep(0.15)
 
-            athletes.append(build_athlete_record(row, profile, card))
+            record = build_athlete_record(row, profile, card)
+            record["photo_url"] = mirror_photo_to_storage(
+                client,
+                record["gender"],
+                record["name"],
+                record.get("photo_url"),
+            )
+            athletes.append(record)
 
     return athletes
 
@@ -291,8 +383,9 @@ def get_client():
 
 def main() -> None:
     client = get_client()
+    ensure_photos_bucket(client)
 
-    athletes = scrape_top100()
+    athletes = scrape_top100(client)
     upsert_athletes(client, athletes)
 
     male_count = sum(1 for athlete in athletes if athlete["gender"] == "male")
