@@ -4,6 +4,7 @@ class Athlete {
     required this.name,
     required this.gender,
     required this.ranking,
+    this.ittfId,
     this.rankingPoints,
     this.age,
     this.height,
@@ -18,6 +19,7 @@ class Athlete {
   final String name;
   final String gender;
   final int ranking;
+  final String? ittfId;
   final int? rankingPoints;
   final int? age;
   final double? height;
@@ -34,6 +36,7 @@ class Athlete {
       name: json['name'] as String,
       gender: json['gender'] as String,
       ranking: json['ranking'] as int,
+      ittfId: json['ittf_id']?.toString(),
       rankingPoints: json['ranking_points'] as int?,
       age: json['age'] as int?,
       height: (json['height'] as num?)?.toDouble(),
@@ -54,6 +57,7 @@ class Athlete {
       'id': id,
       'name': name,
       'gender': gender,
+      'ittf_id': ittfId,
       'ranking': ranking,
       'ranking_points': rankingPoints,
       'age': age,
@@ -71,6 +75,7 @@ class Athlete {
       name: name,
       gender: gender,
       ranking: ranking,
+      ittfId: ittfId,
       rankingPoints: rankingPoints,
       age: age,
       height: height,

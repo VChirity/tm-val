@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS athletes (
     height DOUBLE PRECISION,
     hand TEXT,
     championships_won TEXT[] DEFAULT '{}',
+    ittf_id TEXT,
     photo_url TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT athletes_name_gender_key UNIQUE (name, gender)
@@ -43,6 +44,15 @@ CREATE TABLE IF NOT EXISTS athlete_notes (
 
 CREATE INDEX IF NOT EXISTS athlete_notes_athlete_id_idx
     ON athlete_notes (athlete_id);
+
+CREATE TABLE IF NOT EXISTS broadcast_notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    content TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS broadcast_notes_updated_at_idx
+    ON broadcast_notes (updated_at ASC);
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
@@ -64,8 +74,15 @@ CREATE TRIGGER athlete_notes_set_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION set_updated_at();
 
+DROP TRIGGER IF EXISTS broadcast_notes_set_updated_at ON broadcast_notes;
+CREATE TRIGGER broadcast_notes_set_updated_at
+    BEFORE UPDATE ON broadcast_notes
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
+
 ALTER TABLE athletes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE athlete_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE broadcast_notes ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "athletes_public_read" ON athletes;
 DROP POLICY IF EXISTS "athletes_public_write" ON athletes;
@@ -90,6 +107,13 @@ CREATE POLICY "athletes_auth_update"
 DROP POLICY IF EXISTS "athlete_notes_public_all" ON athlete_notes;
 CREATE POLICY "athlete_notes_auth_all"
     ON athlete_notes FOR ALL
+    TO authenticated
+    USING (true)
+    WITH CHECK (true);
+
+DROP POLICY IF EXISTS "broadcast_notes_auth_all" ON broadcast_notes;
+CREATE POLICY "broadcast_notes_auth_all"
+    ON broadcast_notes FOR ALL
     TO authenticated
     USING (true)
     WITH CHECK (true);
@@ -133,6 +157,12 @@ def main() -> None:
                     "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS ranking_points INTEGER;"
                 )
                 cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS ittf_id TEXT;"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS athletes_ittf_id_idx ON athletes (ittf_id);"
+                )
+                cursor.execute(
                     "DROP INDEX IF EXISTS athlete_notes_athlete_id_uidx;"
                 )
                 cursor.execute(
@@ -146,7 +176,7 @@ def main() -> None:
                     SELECT table_name
                     FROM information_schema.tables
                     WHERE table_schema = 'public'
-                      AND table_name IN ('athletes', 'athlete_notes')
+                      AND table_name IN ('athletes', 'athlete_notes', 'broadcast_notes')
                     ORDER BY table_name;
                     """
                 )

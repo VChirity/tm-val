@@ -144,67 +144,7 @@ def fetch_player_card(ittf_id: str) -> dict[str, Any]:
         return {}
 
 
-def translate_highlight(text: str) -> str:
-    replacements = {
-        "Singles titles:": "Títulos em simples:",
-        "Doubles titles:": "Títulos em duplas:",
-        "Career titles:": "Títulos na carreira:",
-        " singles:": " simples:",
-        " doubles:": " duplas:",
-        " mixed:": " mista:",
-    }
-    for source, target in replacements.items():
-        text = text.replace(source, target)
-    return text
-
-
-def build_championships(card: dict[str, Any]) -> list[str]:
-    titles: list[str] = []
-
-    singles = card.get("singles_titles")
-    doubles = card.get("doubles_titles")
-    if singles:
-        titles.append(translate_highlight(f"Singles titles: {singles}"))
-    if doubles:
-        titles.append(translate_highlight(f"Doubles titles: {doubles}"))
-
-    stats_raw = card.get("stats")
-    if stats_raw:
-        try:
-            stats = json.loads(stats_raw) if isinstance(stats_raw, str) else stats_raw
-            career_titles = stats.get("career_titles") or stats.get("tournament_wins")
-            if career_titles:
-                titles.append(
-                    translate_highlight(f"Career titles: {career_titles}")
-                )
-        except json.JSONDecodeError:
-            pass
-
-    highlights_raw = card.get("highlights")
-    if highlights_raw:
-        try:
-            highlights = (
-                json.loads(highlights_raw)
-                if isinstance(highlights_raw, str)
-                else highlights_raw
-            )
-            for item in highlights:
-                year = item.get("year")
-                for key in ("singles", "doubles", "mixed"):
-                    value = item.get(key)
-                    if value:
-                        titles.append(
-                            translate_highlight(f"{year} {key}: {value}")
-                        )
-        except json.JSONDecodeError:
-            pass
-
-    if card.get("result") and card.get("event_name"):
-        titles.append(f"{card['event_name']}: {card['result']}")
-
-    return titles[:20]
-
-
+from title_enrichment import build_championships
 def build_athlete_record(
     ranking_row: dict[str, Any],
     profile: dict[str, Any],
@@ -225,9 +165,13 @@ def build_athlete_record(
     age = parse_int(profile.get("Age") or ranking_row.get("Age"))
     height = parse_float(card.get("Height") or profile.get("Height"))
 
+    name = ranking_row.get("PlayerName") or profile.get("PlayerName")
+    ittf_id = str(ranking_row.get("IttfId", "")).strip() or None
+
     return {
-        "name": ranking_row.get("PlayerName") or profile.get("PlayerName"),
+        "name": name,
         "gender": gender,
+        "ittf_id": ittf_id,
         "ranking": parse_int(ranking_row.get("CurrentRank") or ranking_row.get("RankingPosition")),
         "ranking_points": parse_int(
             ranking_row.get("RankingPointsYTD")
@@ -236,7 +180,7 @@ def build_athlete_record(
         "age": age,
         "height": height,
         "hand": hand,
-        "championships_won": build_championships(card),
+        "championships_won": build_championships(card, name or ""),
         "photo_url": normalize_photo_url(photo),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }

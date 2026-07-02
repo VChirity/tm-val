@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/supabase_config.dart';
+import '../utils/title_utils.dart';
 
 class WttSyncResult {
   const WttSyncResult({
@@ -11,12 +12,14 @@ class WttSyncResult {
     required this.rankingWeek,
     required this.rankingYear,
     required this.hasUpdates,
+    required this.athletesChanged,
   });
 
   final int athletesSynced;
   final String? rankingWeek;
   final String? rankingYear;
   final bool hasUpdates;
+  final int athletesChanged;
 }
 
 class WttSyncService {
@@ -36,6 +39,10 @@ class WttSyncService {
     'ApiKey': '2bf8b222-532c-4c60-8ebe-eb6fdfebe84a',
   };
 
+  static const _wikiHeaders = {
+    'User-Agent': 'TM-Val/1.0 (tm-val-app)',
+  };
+
   static const _rankingUrl =
       'https://wtt-web-frontdoor-withoutcache-cqakg0andqf5hchn.a01.azurefd.net/ranking/SEN_SINGLES.json';
   static const _playersUrl =
@@ -48,6 +55,13 @@ class WttSyncService {
   }) async {
     onProgress?.call('Consultando rankings na WTT...', 0.05);
 
+    final existingRows = await _fetchExistingAthletes();
+    final existingByKey = {
+      for (final row in existingRows)
+        _athleteKey(row['name']?.toString() ?? '', row['gender']?.toString() ?? ''):
+            row,
+    };
+
     final rankingResponse = await _http.get(
       Uri.parse('$_rankingUrl?q=${DateTime.now().millisecondsSinceEpoch}'),
       headers: _headers,
@@ -59,32 +73,21 @@ class WttSyncService {
 
     final payload = jsonDecode(rankingResponse.body) as Map<String, dynamic>;
     final allRankings = (payload['Result'] as List?) ?? [];
-
     final remoteMeta = _extractRankingMeta(allRankings);
-    final localMeta = await _fetchLocalRankingMeta();
-    final hasUpdates = _hasNewRankingData(localMeta, remoteMeta);
-
-    if (!hasUpdates && localMeta != null) {
-      onProgress?.call('Dados já estão atualizados.', 1);
-      return WttSyncResult(
-        athletesSynced: 0,
-        rankingWeek: remoteMeta?.week,
-        rankingYear: remoteMeta?.year,
-        hasUpdates: false,
-      );
-    }
 
     final targets = ['MS', 'WS'];
     final athletes = <Map<String, dynamic>>[];
     var processed = 0;
     const totalSteps = 200;
+    var changedCount = 0;
 
     for (final subEvent in targets) {
       final rows = _collectGenderRankings(allRankings, subEvent);
       for (final row in rows) {
         processed++;
+        final playerName = row['PlayerName']?.toString() ?? 'Atleta';
         onProgress?.call(
-          'Sincronizando ${row['PlayerName']}...',
+          'Sincronizando $playerName...',
           processed / totalSteps,
         );
 
@@ -95,10 +98,18 @@ class WttSyncService {
         if (ittfId.isNotEmpty) {
           profile = await _fetchPlayerProfile(ittfId);
           card = await _fetchPlayerCard(ittfId);
-          await Future<void>.delayed(const Duration(milliseconds: 120));
+          await Future<void>.delayed(const Duration(milliseconds: 100));
         }
 
-        athletes.add(_buildAthleteRecord(row, profile, card));
+        final record = await _buildAthleteRecord(row, profile, card);
+        final key = _athleteKey(
+          record['name']?.toString() ?? '',
+          record['gender']?.toString() ?? '',
+        );
+        if (_recordChanged(existingByKey[key], record)) {
+          changedCount++;
+        }
+        athletes.add(record);
       }
     }
 
@@ -110,46 +121,68 @@ class WttSyncService {
 
     onProgress?.call('Atualização concluída!', 1);
 
+    final rankingChanged = _detectRankingWeekChange(existingRows, remoteMeta);
+
     return WttSyncResult(
       athletesSynced: athletes.length,
       rankingWeek: remoteMeta?.week,
       rankingYear: remoteMeta?.year,
-      hasUpdates: true,
+      hasUpdates: changedCount > 0 || rankingChanged,
+      athletesChanged: changedCount,
     );
   }
 
-  Future<_RankingMeta?> _fetchLocalRankingMeta() async {
-    final row = await _client
-        .from('athletes')
-        .select('updated_at')
-        .order('updated_at', ascending: false)
-        .limit(1)
-        .maybeSingle();
+  String _athleteKey(String name, String gender) => '$name|$gender';
 
-    if (row == null) {
-      return null;
-    }
-
-    final updatedAt = DateTime.tryParse(row['updated_at']?.toString() ?? '');
-    return _RankingMeta(week: null, year: null, latestUpdate: updatedAt);
+  Future<List<Map<String, dynamic>>> _fetchExistingAthletes() async {
+    final rows = await _client.from('athletes').select(
+      'name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url',
+    );
+    return (rows as List)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
   }
 
-  bool _hasNewRankingData(_RankingMeta? local, _RankingMeta? remote) {
-    if (local == null || remote == null) {
+  bool _detectRankingWeekChange(
+    List<Map<String, dynamic>> existing,
+    _RankingMeta? remote,
+  ) {
+    if (existing.isEmpty || remote?.week == null) {
+      return existing.isEmpty;
+    }
+    return false;
+  }
+
+  bool _recordChanged(
+    Map<String, dynamic>? existing,
+    Map<String, dynamic> record,
+  ) {
+    if (existing == null) {
       return true;
     }
 
-    if (remote.week != null &&
-        remote.year != null &&
-        (local.week != remote.week || local.year != remote.year)) {
+    bool listEq(Object? a, Object? b) {
+      final la = (a as List?)?.map((e) => e.toString()).toList() ?? [];
+      final lb = (b as List?)?.map((e) => e.toString()).toList() ?? [];
+      if (la.length != lb.length) {
+        return false;
+      }
+      for (var i = 0; i < la.length; i++) {
+        if (la[i] != lb[i]) {
+          return false;
+        }
+      }
       return true;
     }
 
-    if (local.latestUpdate == null) {
-      return true;
-    }
-
-    return DateTime.now().difference(local.latestUpdate!).inDays >= 7;
+    return existing['ranking'] != record['ranking'] ||
+        existing['ranking_points'] != record['ranking_points'] ||
+        existing['age'] != record['age'] ||
+        existing['height']?.toString() != record['height']?.toString() ||
+        existing['hand']?.toString() != record['hand']?.toString() ||
+        existing['ittf_id']?.toString() != record['ittf_id']?.toString() ||
+        existing['photo_url']?.toString() != record['photo_url']?.toString() ||
+        !listEq(existing['championships_won'], record['championships_won']);
   }
 
   _RankingMeta? _extractRankingMeta(List<dynamic> rankings) {
@@ -161,7 +194,6 @@ class WttSyncService {
     return _RankingMeta(
       week: first['RankingWeek']?.toString(),
       year: first['RankingYear']?.toString(),
-      latestUpdate: null,
     );
   }
 
@@ -229,11 +261,11 @@ class WttSyncService {
     }
   }
 
-  Map<String, dynamic> _buildAthleteRecord(
+  Future<Map<String, dynamic>> _buildAthleteRecord(
     Map<String, dynamic> rankingRow,
     Map<String, dynamic> profile,
     Map<String, dynamic> card,
-  ) {
+  ) async {
     final subEvent = rankingRow['SubEventCode']?.toString() ?? '';
     final gender = subEvent == 'MS'
         ? 'male'
@@ -245,13 +277,21 @@ class WttSyncService {
       throw StateError('SubEventCode desconhecido: $subEvent');
     }
 
+    final name = rankingRow['PlayerName'] ?? profile['PlayerName'];
+    final ittfId = rankingRow['IttfId']?.toString() ?? '';
     final photo = profile['HeadshotR'] ??
         profile['HeadShot'] ??
         profile['HeadshotL'];
 
+    final cardTitles = _buildChampionshipsFromCard(card);
+    final wikiTitles = _needsWikiEnrichment(cardTitles)
+        ? await _fetchWikipediaTitles(name?.toString() ?? '')
+        : <String>[];
+
     return {
-      'name': rankingRow['PlayerName'] ?? profile['PlayerName'],
+      'name': name,
       'gender': gender,
+      'ittf_id': ittfId.isEmpty ? null : ittfId,
       'ranking': _parseInt(
         rankingRow['CurrentRank'] ?? rankingRow['RankingPosition'],
       ),
@@ -261,22 +301,22 @@ class WttSyncService {
       'age': _parseInt(profile['Age'] ?? rankingRow['Age']),
       'height': _parseDouble(card['Height'] ?? profile['Height']),
       'hand': profile['Handedness'] ?? card['Hand'],
-      'championships_won': _buildChampionships(card),
+      'championships_won': TitleUtils.mergeUnique(cardTitles, wikiTitles),
       'photo_url': _normalizePhotoUrl(photo?.toString()),
       'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
   }
 
-  List<String> _buildChampionships(Map<String, dynamic> card) {
+  List<String> _buildChampionshipsFromCard(Map<String, dynamic> card) {
     final titles = <String>[];
 
     final singles = card['singles_titles'];
     final doubles = card['doubles_titles'];
     if (singles != null && '$singles'.isNotEmpty) {
-      titles.add(_translateHighlight('Singles titles: $singles'));
+      titles.add('Singles titles: $singles');
     }
     if (doubles != null && '$doubles'.isNotEmpty) {
-      titles.add(_translateHighlight('Doubles titles: $doubles'));
+      titles.add('Doubles titles: $doubles');
     }
 
     final statsRaw = card['stats'];
@@ -288,7 +328,7 @@ class WttSyncService {
         final careerTitles =
             stats['career_titles'] ?? stats['tournament_wins'];
         if (careerTitles != null) {
-          titles.add(_translateHighlight('Career titles: $careerTitles'));
+          titles.add('Career titles: $careerTitles');
         }
       } catch (_) {}
     }
@@ -304,8 +344,11 @@ class WttSyncService {
           final year = map['year'];
           for (final key in ['singles', 'doubles', 'mixed']) {
             final value = map[key];
-            if (value != null && '$value'.isNotEmpty) {
-              titles.add(_translateHighlight('$year $key: $value'));
+            if (value == null || '$value'.isEmpty) {
+              continue;
+            }
+            for (final tournament in TitleUtils.splitTournamentList('$value')) {
+              titles.add('$year $key: $tournament');
             }
           }
         }
@@ -316,24 +359,123 @@ class WttSyncService {
       titles.add('${card['event_name']}: ${card['result']}');
     }
 
-    return titles.take(20).toList();
+    if (card['last_result'] != null) {
+      titles.add('Último resultado: ${card['last_result']}');
+    }
+
+    return titles;
   }
 
-  String _translateHighlight(String text) {
-    const replacements = {
-      'Singles titles:': 'Títulos em simples:',
-      'Doubles titles:': 'Títulos em duplas:',
-      'Career titles:': 'Títulos na carreira:',
-      ' singles:': ' simples:',
-      ' doubles:': ' duplas:',
-      ' mixed:': ' mista:',
-    };
+  bool _needsWikiEnrichment(List<String> cardTitles) {
+    return !cardTitles.any((title) {
+      final year = TitleUtils.extractYear(title);
+      return year != null && year >= 2022;
+    });
+  }
 
-    var translated = text;
-    for (final entry in replacements.entries) {
-      translated = translated.replaceAll(entry.key, entry.value);
+  Future<List<String>> _fetchWikipediaTitles(String playerName) async {
+    if (playerName.trim().isEmpty) {
+      return [];
     }
-    return translated;
+
+    try {
+      final searchUri = Uri.https('en.wikipedia.org', '/w/api.php', {
+        'action': 'query',
+        'list': 'search',
+        'srsearch': '$playerName table tennis',
+        'srlimit': '2',
+        'format': 'json',
+      });
+      final searchResp =
+          await _http.get(searchUri, headers: _wikiHeaders).timeout(
+                const Duration(seconds: 10),
+              );
+      if (searchResp.statusCode != 200) {
+        return [];
+      }
+
+      final hits = (jsonDecode(searchResp.body) as Map)['query']?['search']
+          as List?;
+      if (hits == null || hits.isEmpty) {
+        return [];
+      }
+
+      final page = hits.first['title'] as String;
+      final parseUri = Uri.https('en.wikipedia.org', '/w/api.php', {
+        'action': 'parse',
+        'page': page,
+        'prop': 'wikitext',
+        'format': 'json',
+      });
+      final parseResp =
+          await _http.get(parseUri, headers: _wikiHeaders).timeout(
+                const Duration(seconds: 10),
+              );
+      if (parseResp.statusCode != 200) {
+        return [];
+      }
+
+      final wikitext = (jsonDecode(parseResp.body) as Map)['parse']?['wikitext']
+          ?['*'] as String?;
+      if (wikitext == null) {
+        return [];
+      }
+
+      final titles = <String>[];
+      final medalBlocks = RegExp(
+        r'\{\{Med(?:al|alCompetition)[^}]*\}\}',
+        dotAll: true,
+      ).allMatches(wikitext);
+
+      for (final block in medalBlocks) {
+        final text = block.group(0)!;
+        final year = RegExp(r'year\s*=\s*([^|\n}]+)', caseSensitive: false)
+            .firstMatch(text)
+            ?.group(1)
+            ?.trim();
+        final comp = RegExp(r'competition\s*=\s*([^|\n}]+)', caseSensitive: false)
+            .firstMatch(text)
+            ?.group(1)
+            ?.trim();
+        final event = RegExp(r'event\s*=\s*([^|\n}]+)', caseSensitive: false)
+            .firstMatch(text)
+            ?.group(1)
+            ?.trim();
+        final place = RegExp(r'\b(Gold|Silver|Bronze)\b', caseSensitive: false)
+            .firstMatch(text)
+            ?.group(1);
+
+        if (comp == null || place == null) {
+          continue;
+        }
+
+        var line = '${year ?? '?'} $place — $comp';
+        if (event != null && event.isNotEmpty) {
+          line += ' ($event)';
+        }
+        titles.add(line);
+      }
+
+      for (final line in wikitext.split('\n')) {
+        final trimmed = line.trim();
+        if (!trimmed.startsWith('*')) {
+          continue;
+        }
+        if (!RegExp(
+          r'WTT|World Championship|Olympic|Grand Smash|Singapore Smash|Contender|Cup Finals',
+          caseSensitive: false,
+        ).hasMatch(trimmed)) {
+          continue;
+        }
+        if (RegExp(r'\b(19|20)\d{2}\b').hasMatch(trimmed)) {
+          titles.add(trimmed.replaceFirst('*', '').trim());
+        }
+      }
+
+      return titles;
+    } catch (_) {
+      return [];
+    }
   }
 
   String? _normalizePhotoUrl(String? url) {
@@ -371,10 +513,8 @@ class _RankingMeta {
   const _RankingMeta({
     required this.week,
     required this.year,
-    required this.latestUpdate,
   });
 
   final String? week;
   final String? year;
-  final DateTime? latestUpdate;
 }

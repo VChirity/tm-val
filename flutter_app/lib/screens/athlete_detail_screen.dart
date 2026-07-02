@@ -4,7 +4,9 @@ import 'package:intl/intl.dart';
 import '../models/athlete.dart';
 import '../models/athlete_note.dart';
 import '../services/athlete_repository.dart';
+import '../services/wtt_head_to_head_service.dart';
 import '../utils/pt_br.dart';
+import '../utils/title_utils.dart';
 import '../widgets/athlete_photo.dart';
 
 class AthleteDetailScreen extends StatefulWidget {
@@ -18,7 +20,9 @@ class AthleteDetailScreen extends StatefulWidget {
 
 class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   final _repository = AthleteRepository();
+  final _h2hService = WttHeadToHeadService();
   final _newNoteController = TextEditingController();
+  final _opponentSearchController = TextEditingController();
 
   Athlete? _athlete;
   List<AthleteNote> _notes = [];
@@ -28,6 +32,12 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   bool _isSaving = false;
   String? _errorMessage;
   bool _notesChanged = false;
+
+  int? _fromYear;
+  Athlete? _opponent;
+  HeadToHeadSummary? _h2hSummary;
+  bool _h2hLoading = false;
+  String? _h2hError;
 
   @override
   void initState() {
@@ -39,6 +49,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   void dispose() {
     _newNoteController.dispose();
     _editNoteController.dispose();
+    _opponentSearchController.dispose();
     super.dispose();
   }
 
@@ -64,6 +75,48 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
       setState(() {
         _errorMessage = error.toString();
         _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadHeadToHead(Athlete opponent) async {
+    final athlete = _athlete;
+    if (athlete?.ittfId == null || opponent.ittfId == null) {
+      setState(() {
+        _h2hError = 'Um dos jogadores não possui ID ITTF cadificado.';
+        _h2hSummary = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _opponent = opponent;
+      _h2hLoading = true;
+      _h2hError = null;
+      _h2hSummary = null;
+    });
+
+    try {
+      final summary = await _h2hService.fetchSummary(
+        player1IttfId: athlete!.ittfId!,
+        player2IttfId: opponent.ittfId!,
+        player1Name: athlete.name,
+        player2Name: opponent.name,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _h2hSummary = summary;
+        _h2hLoading = false;
+        if (summary == null) {
+          _h2hError = 'Nenhum confronto encontrado na WTT.';
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _h2hLoading = false;
+        _h2hError = 'Erro ao buscar confronto: $error';
       });
     }
   }
@@ -348,6 +401,175 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
     );
   }
 
+  Widget _buildTitlesSection(Athlete athlete) {
+    final allTitles = athlete.championshipsWon
+        .map(TitleUtils.translateHighlight)
+        .toList();
+    final years = TitleUtils.availableYears(allTitles);
+    final filtered = TitleUtils.filterFromYear(allTitles, _fromYear);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Títulos / destaques',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const Divider(),
+            Row(
+              children: [
+                const Text('A partir de: '),
+                const SizedBox(width: 8),
+                DropdownButton<int?>(
+                  value: _fromYear,
+                  hint: const Text('Todos'),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text('Todos'),
+                    ),
+                    ...years.map(
+                      (year) => DropdownMenuItem<int?>(
+                        value: year,
+                        child: Text('$year'),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) => setState(() => _fromYear = value),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (filtered.isEmpty)
+              Text(
+                _fromYear == null
+                    ? 'Nenhum título cadastrado.'
+                    : 'Nenhum título a partir de $_fromYear.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              )
+            else
+              ...filtered.map(
+                (title) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('• '),
+                      Expanded(child: Text(title)),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeadToHeadSection(Athlete athlete) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Confronto direto',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const Divider(),
+            if (athlete.ittfId == null)
+              const Text(
+                'Este atleta ainda não possui ID ITTF. Clique em Atualizar na lista.',
+              )
+            else ...[
+              Autocomplete<Athlete>(
+                optionsBuilder: (textEditingValue) async {
+                  final query = textEditingValue.text.trim();
+                  if (query.length < 2) {
+                    return const Iterable<Athlete>.empty();
+                  }
+                  return _repository.searchAthletes(
+                    query: query,
+                    excludeId: athlete.id,
+                  );
+                },
+                displayStringForOption: (option) => option.name,
+                onSelected: _loadHeadToHead,
+                fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+                  _opponentSearchController.value = controller.value;
+                  return TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    decoration: InputDecoration(
+                      hintText: 'Buscar adversário (ex.: Hugo Calderano)',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: _h2hLoading
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : const Icon(Icons.search),
+                    ),
+                  );
+                },
+              ),
+              if (_opponent != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '${athlete.name} x ${_opponent!.name}',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
+              if (_h2hError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _h2hError!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ],
+              if (_h2hSummary != null) ...[
+                const SizedBox(height: 12),
+                _buildInfoRow(
+                  'Total de partidas',
+                  '${_h2hSummary!.totalMatches}',
+                ),
+                _buildInfoRow(
+                  'Vitórias de ${athlete.name}',
+                  '${_h2hSummary!.player1Wins}',
+                ),
+                _buildInfoRow(
+                  'Vitórias de ${_opponent?.name ?? "adversário"}',
+                  '${_h2hSummary!.player2Wins}',
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Fonte: WTT Head-to-Head',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildProfile(Athlete athlete) {
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
 
@@ -410,36 +632,10 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
         ),
         if (athlete.championshipsWon.isNotEmpty) ...[
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Títulos / destaques',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const Divider(),
-                  ...athlete.championshipsWon.map(
-                    (title) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('• '),
-                          Expanded(
-                            child: Text(PtBr.translateHighlight(title)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _buildTitlesSection(athlete),
         ],
+        const SizedBox(height: 16),
+        _buildHeadToHeadSection(athlete),
         const SizedBox(height: 16),
         _buildNotesSection(),
       ],

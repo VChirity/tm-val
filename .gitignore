@@ -9,6 +9,9 @@ venv/
 /Lib/
 _probe_*.py
 _probe_*.txt
+_probe_*.html
+probe_*.py
+probe_*.json
 _rank.bin
 _wtt.html
 scraper_run.log
