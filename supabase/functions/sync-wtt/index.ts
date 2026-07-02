@@ -52,16 +52,6 @@ function splitTournamentList(value: string): string[] {
   return value.split(/,\s*|\t|\n/).map((p) => p.trim()).filter(Boolean);
 }
 
-function cleanWikiText(value: string): string {
-  return value
-    .replace(/\[\[[^|\]]+\|([^\]]+)\]\]/g, "$1")
-    .replace(/\[\[([^\]]+)\]\]/g, "$1")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\{\{CHN\}\}/gi, "China")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function splitWikiParams(text: string): string[] {
   const parts: string[] = [];
   let current = "";
@@ -113,27 +103,177 @@ function extractMedalTemplates(
   return results;
 }
 
+function cleanWikiText(value: string): string {
+  return value
+    .replace(/<ref[^>]*>.*?<\/ref>/gis, "")
+    .replace(/\{\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}\}/gs, "")
+    .replace(/\[\[[^|\]]+\|([^\]]+)\]\]/g, "$1")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/\[https?:\/\/[^\]|]+(?:\|([^\]]+))?\]/g, (_, label) =>
+      (label ?? "").trim()
+    )
+    .replace(/'{2,5}([^']+)'{2,5}/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\{\{CHN\}\}/gi, "China")
+    .replace(/\(\s*archived[^)]*\)/gi, "")
+    .replace(/\(\s*alternate link[^)]*\)/gi, "")
+    .replace(/[\[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[ .,;]+$/g, "");
+}
+
 function translateHighlight(text: string): string {
-  const replacements: Record<string, string> = {
-    "Singles titles:": "Títulos em simples:",
-    "Doubles titles:": "Títulos em duplas:",
-    "Career titles:": "Títulos na carreira:",
-    " singles:": " simples:",
-    " doubles:": " duplas:",
-    " mixed:": " mista:",
-    Winner: "Campeão",
-    Champion: "Campeão",
-    Team: "Equipe",
-    Singles: "Simples",
-    Doubles: "Duplas",
-    "Mixed doubles": "Duplas mistas",
-    "Mixed team": "Equipe mista",
-  };
+  const replacements: Array<[string, string]> = [
+    ["World Table Tennis Championships", "Campeonato Mundial"],
+    ["World Championships", "Campeonato Mundial"],
+    ["Table Tennis World Cup", "Copa do Mundo"],
+    ["Pan American Table Tennis Championships", "Pan-Americano"],
+    ["Pan American Games", "Jogos Pan-Americanos"],
+    ["Olympic Games", "Olimpíadas"],
+    ["Singles titles:", "Títulos em simples:"],
+    ["Doubles titles:", "Títulos em duplas:"],
+    ["Career titles:", "Títulos na carreira:"],
+    [" singles:", " simples:"],
+    [" doubles:", " duplas:"],
+    [" mixed:", " mista:"],
+    ["Mixed doubles", "Duplas mistas"],
+    ["Mixed team", "Equipe mista"],
+    ["Singles", "Simples"],
+    ["Doubles", "Duplas"],
+    ["Team", "Equipe"],
+    ["Winner", "Campeão"],
+    ["Champion", "Campeão"],
+    ["Gold", "Ouro"],
+    ["Silver", "Prata"],
+    ["Bronze", "Bronze"],
+    ["Singapore", "Singapura"],
+  ];
   let out = text;
-  for (const [src, dst] of Object.entries(replacements)) {
-    out = out.replaceAll(src, dst);
+  for (const [src, dst] of replacements) out = out.replaceAll(src, dst);
+  return out.replace(/\s+/g, " ").trim();
+}
+
+const IMPORTANT_COMP =
+  /olympic|olimp[ií]ada|world table tennis championship|world championship|table tennis world cup|campeonato mundial|mundial/i;
+const WTT_EVENT =
+  /\bwtt\b|grand smash|star contender|contender|cup finals|wtt finals|wtt champions/i;
+const NACIONAL_EVENT =
+  /pan.?american|panameric|patc|south american|sul.?americ|latin american|nacional/i;
+const PARTICIPATION_ONLY =
+  /\b(group stage|round of \d+|^\d+(?:st|nd|rd|th) round|3rd round)\b/i;
+const TITLE_RESULT = /\b(champion|winner|campe[aã]o|vencedor|gold medal)\b/i;
+const RUNNER_UP = /\b(runner[- ]?up|silver medal)\b/i;
+const BRONZE_RESULT = /\b(bronze medal|bronze)\b/i;
+const SEMIFINAL = /\b(semi[- ]?finals?)\b/i;
+const QUARTERFINAL = /\b(quarter[- ]?finals?)\b/i;
+
+function isRelevantWikiEvent(event: string): boolean {
+  const cleaned = cleanWikiText(event);
+  return WTT_EVENT.test(cleaned) || IMPORTANT_COMP.test(cleaned) ||
+    NACIONAL_EVENT.test(cleaned) ||
+    /pan.?american|world cup|grand smash|smash|contender|olympic|mundial/i.test(
+      cleaned,
+    );
+}
+
+function formatWttEventName(event: string): string {
+  const cleaned = translateHighlight(cleanWikiText(event));
+  const lower = cleaned.toLowerCase();
+  if (lower.includes("grand smash")) return "WTT Grand Smash";
+  if (lower.includes("star contender")) return "WTT Star Contender";
+  if (lower.includes("contender")) return "WTT Contender";
+  if (lower.includes("cup finals") || lower.includes("wtt finals")) {
+    return "WTT Finals";
   }
-  return out;
+  if (lower.includes("wtt champions")) return "WTT Champions";
+  if (WTT_EVENT.test(cleaned) && !cleaned.toUpperCase().startsWith("WTT")) {
+    return `WTT ${cleaned}`;
+  }
+  return cleaned;
+}
+
+function normalizeEventName(event: string): string {
+  const cleaned = translateHighlight(cleanWikiText(event));
+  return WTT_EVENT.test(cleaned) ? formatWttEventName(cleaned) : cleaned;
+}
+
+function resultToPt(result: string, event: string): string | null {
+  const cleaned = cleanWikiText(result);
+  if (!cleaned || PARTICIPATION_ONLY.test(cleaned)) return null;
+  const important = IMPORTANT_COMP.test(event);
+  const wtt = WTT_EVENT.test(event);
+  if (TITLE_RESULT.test(cleaned)) return "Campeão";
+  if (RUNNER_UP.test(cleaned)) return important && !wtt ? "2° lugar" : null;
+  if (BRONZE_RESULT.test(cleaned)) return important && !wtt ? "3° lugar" : null;
+  if (SEMIFINAL.test(cleaned)) return important ? "4° lugar" : null;
+  if (QUARTERFINAL.test(cleaned)) return important ? "5-8° lugar" : null;
+  return null;
+}
+
+function expandParentheticalEntries(details: string): string[] {
+  const cleaned = cleanWikiText(details).replace(/\bSingapore\b/g, "Singapura");
+  return splitTournamentList(cleaned);
+}
+
+function formatBulletTitle(
+  event: string,
+  resultPt: string,
+  detail: string,
+): string | null {
+  const eventName = normalizeEventName(event);
+  const cleanedDetail = cleanWikiText(detail).replace(/\bSingapore\b/g, "Singapura");
+  const year = yearFromParts(cleanedDetail);
+  const remainder = year
+    ? cleanedDetail.replace(year, "").trim()
+    : cleanedDetail;
+  const location = year && !remainder ? year : (cleanedDetail || year || "?");
+  return translateHighlight(`${eventName}: ${resultPt} (${location})`);
+}
+
+function parseWikiBulletLine(line: string): string[] {
+  const stripped = line.trim();
+  if (!stripped.startsWith("*")) return [];
+  if (
+    stripped.startsWith("* {") || stripped.startsWith("* {{") ||
+    stripped.startsWith("* [")
+  ) return [];
+
+  const body = cleanWikiText(stripped.replace(/^\*\s*/, ""));
+  if (!body || /https?:\/\//i.test(body) || !body.includes(":")) return [];
+
+  const colon = body.indexOf(":");
+  const event = body.slice(0, colon).trim();
+  const rest = body.slice(colon + 1).trim();
+  if (!event || !rest || !isRelevantWikiEvent(event)) return [];
+
+  const parenMatch = rest.match(/\(([^)]+)\)\.?$/);
+  if (!parenMatch) return [];
+
+  const detailsRaw = parenMatch[1];
+  const resultRaw = rest.slice(0, parenMatch.index).trim();
+  const resultPt = resultToPt(resultRaw, event);
+  if (!resultPt) return [];
+
+  const titles: string[] = [];
+  for (const detail of expandParentheticalEntries(detailsRaw)) {
+    const formatted = formatBulletTitle(event, resultPt, detail);
+    if (formatted) titles.push(formatted);
+  }
+  return titles;
+}
+
+function formatCardHighlight(year: string, key: string, tournament: string): string {
+  let event = translateHighlight(cleanWikiText(tournament));
+  const keyPt = ({ singles: "simples", doubles: "duplas", mixed: "mista" } as Record<
+    string,
+    string
+  >)[key] ?? key;
+  if (WTT_EVENT.test(event) && !event.toUpperCase().startsWith("WTT")) {
+    event = `WTT ${event}`;
+  }
+  return `${year} ${keyPt}: ${event}`;
 }
 
 function titlesFromCard(card: Record<string, unknown>): string[] {
@@ -159,12 +299,12 @@ function titlesFromCard(card: Record<string, unknown>): string[] {
         ? JSON.parse(highlightsRaw)
         : highlightsRaw;
       for (const item of highlights as Record<string, unknown>[]) {
-        const year = item.year;
+        const year = String(item.year ?? "");
         for (const key of ["singles", "doubles", "mixed"]) {
           const value = item[key];
           if (!value) continue;
           for (const tournament of splitTournamentList(String(value))) {
-            titles.push(`${year} ${key}: ${tournament}`);
+            titles.push(formatCardHighlight(year, key, tournament));
           }
         }
       }
@@ -174,10 +314,12 @@ function titlesFromCard(card: Record<string, unknown>): string[] {
   }
 
   if (card.result && card.event_name) {
-    titles.push(`${card.event_name}: ${card.result}`);
+    const event = normalizeEventName(String(card.event_name));
+    const result = resultToPt(String(card.result), event);
+    if (result) titles.push(`${event}: ${result}`);
   }
   if (card.last_result) {
-    titles.push(`Último resultado: ${card.last_result}`);
+    titles.push(`Último resultado: ${cleanWikiText(String(card.last_result))}`);
   }
   return titles;
 }
@@ -263,16 +405,7 @@ async function titlesFromWiki(playerName: string): Promise<string[]> {
     }
 
     for (const line of text.split("\n")) {
-      const stripped = line.trim();
-      if (!stripped.startsWith("*")) continue;
-      if (
-        !/WTT|World Championship|Olympic|Grand Smash|Singapore Smash|Contender|Cup Finals|Asian Championship|World Cup|Olimp/i
-          .test(stripped)
-      ) continue;
-      const clean = cleanWikiText(stripped.replace(/^\*\s*/, ""));
-      if (/\b(19|20)\d{2}\b/.test(clean)) {
-        titles.push(translateHighlight(clean));
-      }
+      titles.push(...parseWikiBulletLine(line));
     }
 
     return titles;
@@ -300,8 +433,11 @@ function mergeUnique(...lists: string[][]): string[] {
   const out: string[] = [];
   for (const list of lists) {
     for (const item of list) {
-      const t = translateHighlight(item.trim());
+      const t = translateHighlight(cleanWikiText(item.trim()));
       if (!t || seen.has(t)) continue;
+      if (/https?:\/\//i.test(t) || t.includes("{{") || /\[http/i.test(t)) {
+        continue;
+      }
       seen.add(t);
       out.push(t);
     }

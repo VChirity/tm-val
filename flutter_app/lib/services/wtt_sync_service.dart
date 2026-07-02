@@ -461,53 +461,20 @@ class WttSyncService {
       }
 
       final titles = <String>[];
-      final medalBlocks = RegExp(
-        r'\{\{Med(?:al|alCompetition)[^}]*\}\}',
-        dotAll: true,
-      ).allMatches(wikitext);
-
-      for (final block in medalBlocks) {
-        final text = block.group(0)!;
-        final year = RegExp(r'year\s*=\s*([^|\n}]+)', caseSensitive: false)
-            .firstMatch(text)
-            ?.group(1)
-            ?.trim();
-        final comp = RegExp(r'competition\s*=\s*([^|\n}]+)', caseSensitive: false)
-            .firstMatch(text)
-            ?.group(1)
-            ?.trim();
-        final event = RegExp(r'event\s*=\s*([^|\n}]+)', caseSensitive: false)
-            .firstMatch(text)
-            ?.group(1)
-            ?.trim();
-        final place = RegExp(r'\b(Gold|Silver|Bronze)\b', caseSensitive: false)
-            .firstMatch(text)
-            ?.group(1);
-
-        if (comp == null || place == null) {
-          continue;
-        }
-
-        var line = '${year ?? '?'} $place — $comp';
-        if (event != null && event.isNotEmpty) {
-          line += ' ($event)';
-        }
-        titles.add(line);
-      }
-
       for (final line in wikitext.split('\n')) {
-        final trimmed = line.trim();
-        if (!trimmed.startsWith('*')) {
+        final cleaned = TitleUtils.cleanTitle(
+          line.replaceFirst(RegExp(r'^\*\s*'), '').trim(),
+        );
+        if (cleaned.isEmpty ||
+            cleaned.contains('http') ||
+            TitleUtils.extractYear(cleaned) == null) {
           continue;
         }
-        if (!RegExp(
-          r'WTT|World Championship|Olympic|Grand Smash|Singapore Smash|Contender|Cup Finals',
+        if (RegExp(
+          r'WTT|Campeonato Mundial|Olimpíadas|Copa do Mundo|Pan-Americano|Grand Smash|Contender',
           caseSensitive: false,
-        ).hasMatch(trimmed)) {
-          continue;
-        }
-        if (RegExp(r'\b(19|20)\d{2}\b').hasMatch(trimmed)) {
-          titles.add(trimmed.replaceFirst('*', '').trim());
+        ).hasMatch(cleaned)) {
+          titles.add(cleaned);
         }
       }
 
