@@ -74,12 +74,21 @@ MEDAL_LOCATION_EVENT: dict[tuple[str, str], str] = {
     ("2025", "China"): "WTT Grand Smash",
     ("2025", "United States"): "WTT Grand Smash",
     ("2026", "Singapore"): "WTT Grand Smash",
-    ("2025", "Singapore"): "WTT Champions",
+    ("2025", "Singapore"): "WTT Grand Smash",
+    ("2024", "Singapore"): "WTT Grand Smash",
+    ("2023", "Singapore"): "WTT Grand Smash",
+    ("2022", "Singapore"): "WTT Grand Smash",
     ("2025", "Chongqing"): "WTT Champions",
-    ("2025", "Macao"): "Copa do Mundo",
+    ("2025", "Macao"): "WTT Champions",
+    ("2024", "Macao"): "WTT Champions",
+    ("2023", "Macao"): "WTT Champions",
+    ("2022", "Macao"): "WTT Champions",
     ("2026", "Macao"): "Copa do Mundo",
     ("2025", "Yokohama"): "WTT Contender",
-    ("2025", "Hong Kong"): "WTT",
+    ("2025", "Hong Kong"): "WTT Finals",
+    ("2025", "Malmö"): "WTT Grand Smash",
+    ("2025", "Malmo"): "WTT Grand Smash",
+    ("2025", "Montpellier"): "WTT Champions",
     ("2026", "San Francisco"): "Copa das Américas",
     ("2025", "Doha"): "Campeonato Mundial",
     ("2026", "London"): "Campeonato Mundial",
@@ -89,6 +98,45 @@ MEDAL_LOCATION_EVENT: dict[tuple[str, str], str] = {
     ("2025", "Shenzhen"): "Copa Asiática",
     ("2026", "Haikou"): "Copa Asiática",
 }
+
+WTT_FINALS_DEFAULT_LOCATION: dict[str, str] = {
+    "2021": "Singapura",
+    "2022": "Xinxiang",
+    "2023": "Doha",
+    "2024": "Fukuoka",
+    "2025": "Hong Kong",
+}
+
+PRESTIGIOUS_WTT = re.compile(
+    r"wtt finals|wtt grand smash|wtt champions|grand smash|europe smash",
+    re.I,
+)
+
+NATIONAL_CHAMP = re.compile(
+    r"swedish championship|german championship|french championship|"
+    r"english championship|japanese championship|chinese championship|"
+    r"national championship|national championships|campeonato nacional",
+    re.I,
+)
+
+NATIONAL_COUNTRY_FROM_EVENT: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"swedish", re.I), "Suécia"),
+    (re.compile(r"german", re.I), "Alemanha"),
+    (re.compile(r"french", re.I), "França"),
+    (re.compile(r"english|british", re.I), "Inglaterra"),
+    (re.compile(r"japanese", re.I), "Japão"),
+    (re.compile(r"chinese", re.I), "China"),
+    (re.compile(r"brazilian|brasileiro", re.I), "Brasil"),
+]
+
+SECTION_COMP_ALIASES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"wtt grand smash|\bgrand smash\b", re.I), "WTT Grand Smash"),
+    (re.compile(r"wtt champions|\bwtt champion\b", re.I), "WTT Champions"),
+    (re.compile(r"wtt finals|cup finals|year-end finals", re.I), "WTT Finals"),
+    (re.compile(r"table tennis world cup|ittf world cup|\bworld cup\b", re.I), "Copa do Mundo"),
+    (re.compile(r"star contender", re.I), "WTT Star Contender"),
+    (re.compile(r"\bcontender\b", re.I), "WTT Contender"),
+]
 
 LOCATION_PT = {
     "Singapore": "Singapura",
@@ -101,6 +149,10 @@ LOCATION_PT = {
     "Buenos Aires": "Buenos Aires",
     "Foz do Iguaçu": "Foz do Iguaçu",
     "Rock Hill": "Rock Hill",
+    "Malmö": "Malmö",
+    "Malmo": "Malmö",
+    "Montpellier": "Montpellier",
+    "Saudi": "Arábia Saudita",
 }
 
 
@@ -112,6 +164,77 @@ def _location_lookup_keys(location: str) -> list[str]:
         elif location == source:
             keys.append(target)
     return keys
+
+
+def _section_competition_name(section_raw: str) -> str | None:
+    cleaned = clean_wiki_text(section_raw)
+    for pattern, name in SECTION_COMP_ALIASES:
+        if pattern.search(cleaned):
+            return name
+    return None
+
+
+def _is_world_cup_medal(year: str | None, location: str, combined: str, section_comp: str | None) -> bool:
+    if year == "2025" and location in ("Macau", "Macao"):
+        if "mixed team" in combined.lower() or "equipe" in combined.lower():
+            return True
+        return False
+    if re.search(r"table tennis world cup|ittf world cup|mixed team world cup", combined, re.I):
+        return True
+    if section_comp == "Copa do Mundo":
+        return True
+    if year == "2026" and location in ("Macau", "Macao"):
+        return True
+    return False
+
+
+def _default_location_for_event(comp_name: str, year: str | None, event_raw: str = "") -> str:
+    lower = event_raw.lower()
+    for token, loc in (
+        ("macao", "Macau"),
+        ("macau", "Macau"),
+        ("singapore", "Singapura"),
+        ("montpellier", "Montpellier"),
+        ("malmö", "Malmö"),
+        ("malmo", "Malmö"),
+        ("europe smash", "Malmö"),
+        ("saudi", "Arábia Saudita"),
+        ("united states", "Estados Unidos"),
+        ("china smash", "China"),
+        ("chongqing", "Chongqing"),
+        ("incheon", "Incheon"),
+        ("yokohama", "Yokohama"),
+    ):
+        if token in lower:
+            return loc
+    if comp_name == "WTT Finals" and year:
+        return WTT_FINALS_DEFAULT_LOCATION.get(year, "Hong Kong")
+    if year and year != "?":
+        for loc in _location_lookup_keys("?"):
+            pass
+        for loc_key in LOCATION_PT:
+            mapped = MEDAL_LOCATION_EVENT.get((year, loc_key))
+            if mapped == comp_name:
+                return localize_place(loc_key)
+    return "?"
+
+
+def _extract_event_location_from_name(event: str) -> tuple[str, str | None]:
+    lower = clean_wiki_text(event).lower()
+    comp = _normalize_event_name(event)
+    for token, loc in (
+        ("montpellier", "Montpellier"),
+        ("malmö", "Malmö"),
+        ("malmo", "Malmö"),
+        ("europe smash", "Malmö"),
+        ("macao", "Macau"),
+        ("macau", "Macau"),
+        ("singapore", "Singapura"),
+        ("incheon", "Incheon"),
+    ):
+        if token in lower:
+            return comp, localize_place(loc)
+    return comp, None
 
 
 def translate_highlight(text: str) -> str:
@@ -222,8 +345,21 @@ def _extract_location(part1: str, part2: str, year: str | None) -> str:
     return "?"
 
 
-def _resolve_competition_name(part1: str, part2: str, raw: str, year: str | None, location: str) -> str:
+def _resolve_competition_name(
+    part1: str,
+    part2: str,
+    raw: str,
+    year: str | None,
+    location: str,
+    section_comp: str | None = None,
+) -> str:
     combined = f"{part1} {part2} {raw}"
+
+    if section_comp and section_comp != "Copa do Mundo":
+        return section_comp
+    if _is_world_cup_medal(year, location, combined, section_comp):
+        return "Copa do Mundo"
+
     for pattern, name in COMPETITION_ALIASES:
         if pattern.search(combined):
             return name
@@ -235,6 +371,8 @@ def _resolve_competition_name(part1: str, part2: str, raw: str, year: str | None
                 return mapped
 
     lower = combined.lower()
+    if "europe smash" in lower or ("grand smash" in lower and "smash" in lower):
+        return "WTT Grand Smash"
     if "grand smash" in lower or re.search(r"\bsmash\b", lower):
         return "WTT Grand Smash"
     if "star contender" in lower:
@@ -245,6 +383,8 @@ def _resolve_competition_name(part1: str, part2: str, raw: str, year: str | None
         return "WTT Champions"
     if "cup finals" in lower or "wtt finals" in lower:
         return "WTT Finals"
+    if section_comp:
+        return section_comp
     if WTT_EVENT.search(combined):
         return _format_wtt_event_name(part1 or part2)
 
@@ -252,7 +392,11 @@ def _resolve_competition_name(part1: str, part2: str, raw: str, year: str | None
     return cleaned or "Torneio"
 
 
-def _format_medal_line(medal_place: str, params: list[str]) -> str | None:
+def _format_medal_line(
+    medal_place: str,
+    params: list[str],
+    section_comp: str | None = None,
+) -> str | None:
     result_pt = RESULT_PT.get(medal_place.title())
     if not result_pt:
         return None
@@ -263,11 +407,50 @@ def _format_medal_line(medal_place: str, params: list[str]) -> str | None:
     year = year_from_parts(part1, part2, raw) or "?"
     location = _extract_location(part1, part2, year)
     category = _discipline_to_pt(part2 or part1)
-    comp_name = _resolve_competition_name(part1, part2, raw, year, location)
+    comp_name = _resolve_competition_name(part1, part2, raw, year, location, section_comp)
+
+    if _is_invalid_macau_2025_singles(year, location, category, raw):
+        if section_comp == "Copa do Mundo" or re.search(
+            r"table tennis world cup|ittf world cup", raw, re.I
+        ):
+            return None
+
+    if (
+        section_comp == "Copa do Mundo"
+        and medal_place.title() == "Gold"
+        and _is_invalid_macau_2025_singles(year, location, category, raw)
+    ):
+        return None
+
+    if (
+        comp_name == "WTT Finals"
+        and medal_place.title() == "Bronze"
+        and year == "2025"
+        and location == "Hong Kong"
+        and category == "Simples"
+        and section_comp == "WTT Finals"
+    ):
+        result_pt = "Campeão"
 
     if PARTICIPATION_ONLY.search(raw) and result_pt != "Campeão":
         return None
-    if result_pt != "Campeão" and WTT_EVENT.search(comp_name) and medal_place.title() != "Gold":
+    if (
+        result_pt != "Campeão"
+        and WTT_EVENT.search(comp_name)
+        and medal_place.title() != "Gold"
+        and not PRESTIGIOUS_WTT.search(comp_name)
+    ):
+        return None
+
+    if location == "?" and comp_name in {"WTT Finals", "WTT Grand Smash", "WTT Champions"}:
+        location = _default_location_for_event(comp_name, year, part1 or part2)
+
+    if (
+        year == "2025"
+        and location in ("Macau", "Macao")
+        and comp_name == "Copa do Mundo"
+        and category == "Simples"
+    ):
         return None
 
     location_year = f"{location} {year}".strip()
@@ -276,11 +459,13 @@ def _format_medal_line(medal_place: str, params: list[str]) -> str | None:
 
 def title_category(title: str) -> str:
     lower = title.lower()
+    if lower.startswith("nacional:"):
+        return "nacional"
     if WTT_EVENT.search(lower):
         return "wtt"
     if NACIONAL_EVENT.search(lower) or re.search(
         r"\b(lima|santiago|havana|guaynabo|asunción|cartagena|san juan|"
-        r"toronto|santo domingo|rock hill|san salvador)\b",
+        r"toronto|santo domingo|rock hill|san salvador|suécia|suecia|sweden)\b",
         lower,
     ):
         return "nacional"
@@ -310,12 +495,27 @@ def _split_wiki_params(text: str) -> list[str]:
     return parts
 
 
-def _extract_medal_templates(wikitext: str) -> list[tuple[str, list[str]]]:
-    results: list[tuple[str, list[str]]] = []
+def _extract_medals_with_context(wikitext: str) -> list[tuple[str | None, str, list[str]]]:
+    results: list[tuple[str | None, str, list[str]]] = []
+    current_section: str | None = None
+    comp_re = re.compile(r"\{\{MedalCompetition\|([^{}]+)\}\}", re.I)
     opener = re.compile(r"\{\{(Medal(?:Gold|Silver|Bronze))\|", re.I)
-    for match in opener.finditer(wikitext):
+
+    pos = 0
+    while pos < len(wikitext):
+        comp_m = comp_re.search(wikitext, pos)
+        medal_m = opener.search(wikitext, pos)
+        if not comp_m and not medal_m:
+            break
+
+        if comp_m and (not medal_m or comp_m.start() <= medal_m.start()):
+            current_section = _section_competition_name(comp_m.group(1))
+            pos = comp_m.end()
+            continue
+
+        assert medal_m is not None
         depth = 2
-        i = match.end()
+        i = medal_m.end()
         content: list[str] = []
         while i < len(wikitext):
             if wikitext.startswith("{{", i):
@@ -333,10 +533,12 @@ def _extract_medal_templates(wikitext: str) -> list[tuple[str, list[str]]]:
             content.append(wikitext[i])
             i += 1
 
-        medal_type = match.group(1)
+        medal_type = medal_m.group(1)
         place = medal_type.replace("Medal", "", 1)
         params = _split_wiki_params("".join(content))
-        results.append((place, params))
+        results.append((current_section, place, params))
+        pos = i + 2
+
     return results
 
 
@@ -345,6 +547,8 @@ def _format_wtt_event_name(event: str) -> str:
     event = translate_highlight(event)
     lower = event.lower()
     if "grand smash" in lower:
+        return "WTT Grand Smash"
+    if "europe smash" in lower:
         return "WTT Grand Smash"
     if "star contender" in lower:
         return "WTT Star Contender"
@@ -375,6 +579,9 @@ def _normalize_event_name(event: str) -> str:
         return "Olimpíadas"
     if re.search(r"pan american games", event, re.I):
         return "Jogos Pan-Americanos"
+    lower = event.lower()
+    if "europe smash" in lower or re.search(r"\b\w+\s+smash\b", lower):
+        return "WTT Grand Smash"
     event = translate_highlight(event)
     if WTT_EVENT.search(event):
         return _format_wtt_event_name(event)
@@ -417,31 +624,85 @@ def _result_to_pt(result: str, event: str) -> str | None:
 
     important = bool(IMPORTANT_COMP.search(event))
     wtt = bool(WTT_EVENT.search(event))
+    prestigious = bool(PRESTIGIOUS_WTT.search(event))
 
     if TITLE_RESULT.search(result):
         return "Campeão"
     if RUNNER_UP.search(result):
-        return "2° lugar" if important and not wtt else None
+        if important and not wtt:
+            return "2° lugar"
+        if prestigious or re.search(r"wtt finals|grand smash|europe smash|wtt champions", event, re.I):
+            return "2° lugar"
+        return None
     if BRONZE_RESULT.search(result):
-        return "3° lugar" if important and not wtt else None
+        if important and not wtt:
+            return "3° lugar"
+        if prestigious:
+            return "3° lugar"
+        return None
     if SEMIFINAL.search(result):
-        return "4° lugar" if important else None
+        return "4° lugar" if important or prestigious else None
     if QUARTERFINAL.search(result):
         return "5-8° lugar" if important else None
     return None
 
 
+def _format_national_bullet(event: str, result_pt: str, detail: str) -> str | None:
+    country: str | None = None
+    for pattern, pt_country in NATIONAL_COUNTRY_FROM_EVENT:
+        if pattern.search(event):
+            country = pt_country
+            break
+    if not country:
+        return None
+    year = year_from_parts(detail) or "?"
+    category = _infer_bullet_category(event, detail) or "Simples"
+    return f"Nacional: {result_pt} ({country} {year} — {category})"
+
+
+def _is_invalid_macau_2025_singles(
+    year: str | None,
+    location: str,
+    category: str,
+    raw: str,
+) -> bool:
+    if year != "2025" or category != "Simples":
+        return False
+    loc = location.lower()
+    if "macau" not in loc and "macao" not in loc:
+        return False
+    if "mixed team" in raw.lower() or "equipe" in raw.lower():
+        return False
+    return True
+
+
 def _format_bullet_title(event: str, result_pt: str, detail: str) -> str | None:
-    event_name = _normalize_event_name(event)
-    detail = localize_place(clean_wiki_text(detail))
+    if NATIONAL_CHAMP.search(event):
+        return _format_national_bullet(event, result_pt, detail)
+
+    event_name, event_loc = _extract_event_location_from_name(event)
+    detail_clean = localize_place(clean_wiki_text(detail))
+    year = year_from_parts(detail_clean) or "?"
+    category = _infer_bullet_category(event, detail_clean) or "Simples"
+    location = event_loc or detail_clean.replace(year, "", 1).strip() if year != "?" else detail_clean
+    if _is_invalid_macau_2025_singles(year, location, category, f"{event_name} {detail_clean}"):
+        if event_name == "Copa do Mundo":
+            return None
+
+    detail = detail_clean
     year = year_from_parts(detail) or "?"
     remainder = detail.replace(year, "", 1).strip() if year != "?" else detail
     if year != "?" and (not remainder or remainder == year):
         if re.search(r"pan-americano|campeonato mundial|copa do mundo", event_name, re.I):
             return None
-        line = f"{event_name}: {result_pt} ({year})"
+        location = event_loc or _default_location_for_event(event_name, year, event)
+        if location != "?":
+            category = _infer_bullet_category(event, detail) or "Simples"
+            line = f"{event_name}: {result_pt} ({location} {year} — {category})"
+        else:
+            line = f"{event_name}: {result_pt} ({year})"
         return translate_highlight(line)
-    location = remainder or detail or year
+    location = localize_place(remainder) if remainder else (event_loc or detail or year)
     category = _infer_bullet_category(event, detail)
     if category:
         line = f"{event_name}: {result_pt} ({location} {year} — {category})"
@@ -456,12 +717,23 @@ def _is_relevant_wiki_event(event: str) -> bool:
         WTT_EVENT.search(event)
         or IMPORTANT_COMP.search(event)
         or NACIONAL_EVENT.search(event)
+        or NATIONAL_CHAMP.search(event)
         or re.search(
-            r"pan.?american|world cup|grand smash|smash|contender|olympic|mundial",
+            r"pan.?american|world cup|grand smash|smash|contender|olympic|mundial|europe smash",
             event,
             re.I,
         )
     )
+
+
+def _split_bullet_event_rest(body: str) -> tuple[str | None, str | None]:
+    if ":" in body:
+        idx = body.index(":")
+        return body[:idx].strip(), body[idx + 1 :].strip()
+    dash = re.search(r"\s[-–—]\s", body)
+    if dash:
+        return body[: dash.start()].strip(), body[dash.end() :].strip()
+    return None, None
 
 
 def _parse_wiki_bullet_line(line: str) -> list[str]:
@@ -477,13 +749,10 @@ def _parse_wiki_bullet_line(line: str) -> list[str]:
     if not body or _RAW_URL.search(body) or _JUNK_TEXT.search(body):
         return []
 
-    if ":" not in body:
+    event, rest = _split_bullet_event_rest(body)
+    if not event or not rest:
         return []
-
-    event, rest = body.split(":", 1)
-    event = event.strip()
-    rest = rest.strip()
-    if not event or not rest or not _is_relevant_wiki_event(event):
+    if not _is_relevant_wiki_event(event) and not NATIONAL_CHAMP.search(event):
         return []
 
     paren_match = re.search(r"\(([^)]+)\)", rest)
@@ -501,6 +770,100 @@ def _parse_wiki_bullet_line(line: str) -> list[str]:
         formatted = _format_bullet_title(event, result_pt, detail)
         if formatted:
             titles.append(formatted)
+    return titles
+
+
+def _parse_notable_results_table(wikitext: str) -> list[str]:
+    titles: list[str] = []
+    current_year: str | None = None
+
+    for line in wikitext.split("\n"):
+        row_span = re.search(r'rowspan="\d+"\|(\d{4})', line)
+        if row_span:
+            current_year = row_span.group(1)
+
+        if not current_year:
+            continue
+        if not (line.strip().startswith("|-") or row_span):
+            continue
+
+        cells = [clean_wiki_text(c.strip()) for c in line.split("|")]
+        cells = [c for c in cells if c and c not in {"-", "rowspan"} and not c.startswith('rowspan="')]
+        if row_span and len(cells) >= 2:
+            event_raw = cells[1] if cells[0] == current_year else cells[0]
+        elif line.strip().startswith("|-") and len(cells) >= 1:
+            event_raw = cells[0]
+        else:
+            continue
+
+        if not event_raw or not _is_relevant_wiki_event(event_raw):
+            continue
+        if PARTICIPATION_ONLY.search(event_raw):
+            continue
+
+        comp_name = _normalize_event_name(event_raw)
+        location = _default_location_for_event(comp_name, current_year, event_raw)
+        category = _infer_bullet_category(event_raw, event_raw) or "Simples"
+        if location != "?":
+            titles.append(f"{comp_name}: Campeão ({location} {current_year} — {category})")
+        else:
+            titles.append(f"{comp_name}: Campeão ({current_year} — {category})")
+
+    return titles
+
+
+def _parse_singles_titles_table(wikitext: str) -> list[str]:
+    """Títulos em simples a partir da wikitable ==Singles titles==."""
+    titles: list[str] = []
+    in_table = False
+    current_year: str | None = None
+
+    for line in wikitext.split("\n"):
+        if "==Singles titles==" in line:
+            in_table = True
+            continue
+        if in_table and line.startswith("==") and "Singles titles" not in line:
+            break
+        if not in_table:
+            continue
+
+        row_span = re.search(r'rowspan="\d+"\|(\d{4})', line)
+        if row_span:
+            current_year = row_span.group(1)
+
+        stripped = line.strip()
+        if not stripped.startswith("|") or stripped in {"|-", "|}"}:
+            continue
+
+        cells = [clean_wiki_text(c.strip()) for c in stripped.split("|")]
+        cells = [c for c in cells if c and c not in {"-", "rowspan"} and not c.startswith('rowspan="')]
+        if not cells:
+            continue
+
+        if re.fullmatch(r"\d{4}", cells[0]):
+            current_year = cells[0]
+            if len(cells) < 2:
+                continue
+            event_raw = cells[1]
+        elif current_year:
+            event_raw = cells[0]
+        else:
+            continue
+
+        if not event_raw or re.fullmatch(r"\d{4}", event_raw):
+            continue
+        if re.search(r"final opponent|score|ref|tournament", event_raw, re.I):
+            continue
+        if not _is_relevant_wiki_event(event_raw) and not WTT_EVENT.search(event_raw):
+            continue
+
+        comp_name = _normalize_event_name(event_raw)
+        location = _default_location_for_event(comp_name, current_year, event_raw)
+        if location != "?":
+            titles.append(f"{comp_name}: Campeão ({location} {current_year} — Simples)")
+        else:
+            titles.append(f"{comp_name}: Campeão ({current_year} — Simples)")
+
     return titles
 
 
@@ -522,6 +885,18 @@ def _parse_wiki_prose_titles(wikitext: str) -> list[str]:
     ):
         titles.append("Pan-Americano: Campeão (Rock Hill 2025 — Duplas mistas)")
 
+    finals_years = re.search(
+        r"won the men's singles title at the WTT Finals in ((?:\d{4},?\s*(?:and\s*)?)+)",
+        plain,
+        re.I,
+    )
+    if finals_years:
+        for year in re.findall(r"\d{4}", finals_years.group(1)):
+            loc = WTT_FINALS_DEFAULT_LOCATION.get(year, "Hong Kong")
+            titles.append(f"WTT Finals: Campeão ({loc} {year} — Simples)")
+
+    titles.extend(_parse_notable_results_table(wikitext))
+    titles.extend(_parse_singles_titles_table(wikitext))
     return titles
 
 
@@ -604,8 +979,8 @@ def titles_from_wikipedia(player_name: str) -> list[str]:
         parse_resp.raise_for_status()
         wikitext = parse_resp.json()["parse"]["wikitext"]["*"]
 
-        for medal_place, params in _extract_medal_templates(wikitext):
-            formatted = _format_medal_line(medal_place, params)
+        for section_comp, medal_place, params in _extract_medals_with_context(wikitext):
+            formatted = _format_medal_line(medal_place, params, section_comp)
             if formatted:
                 titles.append(formatted)
 
@@ -633,19 +1008,25 @@ def _is_junk_title(text: str) -> bool:
         return True
     if text.startswith("WTT Star Contender: Campeão") and "(" not in text:
         return True
+    if PARTICIPATION_ONLY.search(text) and "Campeão" not in text and "2° lugar" not in text:
+        return True
     return False
 
 
 def _normalize_identity_event(event: str) -> str:
     lower = event.lower()
+    if lower.startswith("nacional"):
+        return "nacional"
     if "campeonato mundial" in lower or "world table tennis" in lower:
         return "campeonato mundial"
     if "pan-americano" in lower or "pan american" in lower:
         return "pan-americano"
     if "copa do mundo" in lower or "world cup" in lower:
         return "copa do mundo"
-    if "wtt grand smash" in lower or "grand smash" in lower:
+    if "wtt grand smash" in lower or "grand smash" in lower or "europe smash" in lower:
         return "wtt grand smash"
+    if "wtt finals" in lower or "cup finals" in lower:
+        return "wtt finals"
     if "wtt star contender" in lower:
         return "wtt star contender"
     if "wtt contender" in lower:

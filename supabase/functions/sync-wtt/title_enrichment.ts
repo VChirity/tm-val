@@ -56,12 +56,21 @@ const MEDAL_LOCATION_EVENT: Record<string, string> = {
   "2025|China": "WTT Grand Smash",
   "2025|United States": "WTT Grand Smash",
   "2026|Singapore": "WTT Grand Smash",
-  "2025|Singapore": "WTT Champions",
+  "2025|Singapore": "WTT Grand Smash",
+  "2024|Singapore": "WTT Grand Smash",
+  "2023|Singapore": "WTT Grand Smash",
+  "2022|Singapore": "WTT Grand Smash",
   "2025|Chongqing": "WTT Champions",
-  "2025|Macao": "Copa do Mundo",
+  "2025|Macao": "WTT Champions",
+  "2024|Macao": "WTT Champions",
+  "2023|Macao": "WTT Champions",
+  "2022|Macao": "WTT Champions",
   "2026|Macao": "Copa do Mundo",
   "2025|Yokohama": "WTT Contender",
-  "2025|Hong Kong": "WTT",
+  "2025|Hong Kong": "WTT Finals",
+  "2025|Malmö": "WTT Grand Smash",
+  "2025|Malmo": "WTT Grand Smash",
+  "2025|Montpellier": "WTT Champions",
   "2026|San Francisco": "Copa das Américas",
   "2025|Doha": "Campeonato Mundial",
   "2026|London": "Campeonato Mundial",
@@ -71,6 +80,38 @@ const MEDAL_LOCATION_EVENT: Record<string, string> = {
   "2025|Shenzhen": "Copa Asiática",
   "2026|Haikou": "Copa Asiática",
 };
+
+const WTT_FINALS_DEFAULT_LOCATION: Record<string, string> = {
+  "2021": "Singapura",
+  "2022": "Xinxiang",
+  "2023": "Doha",
+  "2024": "Fukuoka",
+  "2025": "Hong Kong",
+};
+
+const PRESTIGIOUS_WTT = /wtt finals|wtt grand smash|wtt champions|grand smash|europe smash/i;
+
+const NATIONAL_CHAMP =
+  /swedish championship|german championship|french championship|english championship|japanese championship|chinese championship|national championship|national championships|campeonato nacional/i;
+
+const NATIONAL_COUNTRY_FROM_EVENT: Array<[RegExp, string]> = [
+  [/swedish/i, "Suécia"],
+  [/german/i, "Alemanha"],
+  [/french/i, "França"],
+  [/english|british/i, "Inglaterra"],
+  [/japanese/i, "Japão"],
+  [/chinese/i, "China"],
+  [/brazilian|brasileiro/i, "Brasil"],
+];
+
+const SECTION_COMP_ALIASES: Array<[RegExp, string]> = [
+  [/wtt grand smash|\bgrand smash\b/i, "WTT Grand Smash"],
+  [/wtt champions|\bwtt champion\b/i, "WTT Champions"],
+  [/wtt finals|cup finals|year-end finals/i, "WTT Finals"],
+  [/table tennis world cup|ittf world cup|\bworld cup\b/i, "Copa do Mundo"],
+  [/star contender/i, "WTT Star Contender"],
+  [/\bcontender\b/i, "WTT Contender"],
+];
 
 const LOCATION_PT: Record<string, string> = {
   Singapore: "Singapura",
@@ -83,6 +124,10 @@ const LOCATION_PT: Record<string, string> = {
   "Buenos Aires": "Buenos Aires",
   "Foz do Iguaçu": "Foz do Iguaçu",
   "Rock Hill": "Rock Hill",
+  Malmö: "Malmö",
+  Malmo: "Malmö",
+  Montpellier: "Montpellier",
+  Saudi: "Arábia Saudita",
 };
 
 function locationLookupKeys(location: string): string[] {
@@ -92,6 +137,101 @@ function locationLookupKeys(location: string): string[] {
     else if (location === source) keys.push(target);
   }
   return keys;
+}
+
+function sectionCompetitionName(sectionRaw: string): string | null {
+  const cleaned = cleanWikiText(sectionRaw);
+  for (const [pattern, name] of SECTION_COMP_ALIASES) {
+    if (pattern.test(cleaned)) return name;
+  }
+  return null;
+}
+
+function isWorldCupMedal(
+  year: string | null,
+  location: string,
+  combined: string,
+  sectionComp: string | null,
+): boolean {
+  if (year === "2025" && (location === "Macau" || location === "Macao")) {
+    if (/mixed team|equipe/i.test(combined)) return true;
+    return false;
+  }
+  if (/table tennis world cup|ittf world cup|mixed team world cup/i.test(combined)) {
+    return true;
+  }
+  if (sectionComp === "Copa do Mundo") return true;
+  if (year === "2026" && (location === "Macau" || location === "Macao")) return true;
+  return false;
+}
+
+function isInvalidMacau2025Singles(
+  year: string | null,
+  location: string,
+  category: string,
+  raw: string,
+): boolean {
+  if (year !== "2025" || category !== "Simples") return false;
+  const loc = location.toLowerCase();
+  if (!loc.includes("macau") && !loc.includes("macao")) return false;
+  if (/mixed team|equipe/i.test(raw)) return false;
+  return true;
+}
+
+function defaultLocationForEvent(
+  compName: string,
+  year: string | null,
+  eventRaw = "",
+): string {
+  const lower = eventRaw.toLowerCase();
+  const tokens: Array<[string, string]> = [
+    ["macao", "Macau"],
+    ["macau", "Macau"],
+    ["singapore", "Singapura"],
+    ["montpellier", "Montpellier"],
+    ["malmö", "Malmö"],
+    ["malmo", "Malmö"],
+    ["europe smash", "Malmö"],
+    ["saudi", "Arábia Saudita"],
+    ["united states", "Estados Unidos"],
+    ["china smash", "China"],
+    ["chongqing", "Chongqing"],
+    ["incheon", "Incheon"],
+    ["yokohama", "Yokohama"],
+  ];
+  for (const [token, loc] of tokens) {
+    if (lower.includes(token)) return loc;
+  }
+  if (compName === "WTT Finals" && year) {
+    return WTT_FINALS_DEFAULT_LOCATION[year] ?? "Hong Kong";
+  }
+  if (year && year !== "?") {
+    for (const locKey of Object.keys(LOCATION_PT)) {
+      if (MEDAL_LOCATION_EVENT[medalLocationEventKey(year, locKey)] === compName) {
+        return localizePlace(locKey);
+      }
+    }
+  }
+  return "?";
+}
+
+function extractEventLocationFromName(event: string): [string, string | null] {
+  const lower = cleanWikiText(event).toLowerCase();
+  const comp = normalizeEventName(event);
+  const tokens: Array<[string, string]> = [
+    ["montpellier", "Montpellier"],
+    ["malmö", "Malmö"],
+    ["malmo", "Malmö"],
+    ["europe smash", "Malmö"],
+    ["macao", "Macau"],
+    ["macau", "Macau"],
+    ["singapore", "Singapura"],
+    ["incheon", "Incheon"],
+  ];
+  for (const [token, loc] of tokens) {
+    if (lower.includes(token)) return [comp, localizePlace(loc)];
+  }
+  return [comp, null];
 }
 
 function medalLocationEventKey(year: string, loc: string): string {
@@ -215,8 +355,13 @@ function resolveCompetitionName(
   raw: string,
   year: string | null,
   location: string,
+  sectionComp: string | null = null,
 ): string {
   const combined = `${part1} ${part2} ${raw}`;
+
+  if (sectionComp && sectionComp !== "Copa do Mundo") return sectionComp;
+  if (isWorldCupMedal(year, location, combined, sectionComp)) return "Copa do Mundo";
+
   for (const [pattern, name] of COMPETITION_ALIASES) {
     if (pattern.test(combined)) return name;
   }
@@ -229,21 +374,29 @@ function resolveCompetitionName(
   }
 
   const lower = combined.toLowerCase();
+  if (lower.includes("europe smash") || (lower.includes("grand smash") && lower.includes("smash"))) {
+    return "WTT Grand Smash";
+  }
   if (lower.includes("grand smash") || /\bsmash\b/i.test(lower)) return "WTT Grand Smash";
   if (lower.includes("star contender")) return "WTT Star Contender";
   if (lower.includes("contender")) return "WTT Contender";
   if (lower.includes("wtt champions")) return "WTT Champions";
   if (lower.includes("cup finals") || lower.includes("wtt finals")) return "WTT Finals";
+  if (sectionComp) return sectionComp;
   if (WTT_EVENT.test(combined)) return formatWttEventName(part1 || part2);
 
   const cleaned = translateHighlight(cleanWikiText(part1 || part2));
   return cleaned || "Torneio";
 }
 
-function formatMedalLine(medalPlace: string, params: string[]): string | null {
+function formatMedalLine(
+  medalPlace: string,
+  params: string[],
+  sectionComp: string | null = null,
+): string | null {
   const normalized =
     medalPlace.charAt(0).toUpperCase() + medalPlace.slice(1).toLowerCase();
-  const resultPt = RESULT_PT[normalized];
+  let resultPt = RESULT_PT[normalized];
   if (!resultPt) return null;
 
   const part1 = params[0] ? cleanWikiText(params[0]) : "";
@@ -252,23 +405,57 @@ function formatMedalLine(medalPlace: string, params: string[]): string | null {
   const year = yearFromParts(part1, part2, raw) ?? "?";
   const location = extractLocation(part1, part2, year);
   const category = disciplineToPt(part2 || part1);
-  const compName = resolveCompetitionName(part1, part2, raw, year, location);
+  const compName = resolveCompetitionName(part1, part2, raw, year, location, sectionComp);
+
+  if (isInvalidMacau2025Singles(year, location, category, raw)) {
+    if (
+      sectionComp === "Copa do Mundo" ||
+      /table tennis world cup|ittf world cup/i.test(raw)
+    ) {
+      return null;
+    }
+  }
+
+  if (
+    compName === "WTT Finals" &&
+    normalized === "Bronze" &&
+    year === "2025" &&
+    location === "Hong Kong" &&
+    category === "Simples" &&
+    sectionComp === "WTT Finals"
+  ) {
+    resultPt = "Campeão";
+  }
 
   if (PARTICIPATION_ONLY.test(raw) && resultPt !== "Campeão") return null;
-  if (resultPt !== "Campeão" && WTT_EVENT.test(compName) && normalized !== "Gold") {
+  if (
+    resultPt !== "Campeão" &&
+    WTT_EVENT.test(compName) &&
+    normalized !== "Gold" &&
+    !PRESTIGIOUS_WTT.test(compName)
+  ) {
     return null;
   }
 
-  const locationYear = `${location} ${year}`.trim();
+  let resolvedLocation = location;
+  if (
+    resolvedLocation === "?" &&
+    ["WTT Finals", "WTT Grand Smash", "WTT Champions"].includes(compName)
+  ) {
+    resolvedLocation = defaultLocationForEvent(compName, year, part1 || part2);
+  }
+
+  const locationYear = `${resolvedLocation} ${year}`.trim();
   return `${compName}: ${resultPt} (${locationYear} — ${category})`;
 }
 
 export function titleCategory(title: string): string {
   const lower = title.toLowerCase();
+  if (lower.startsWith("nacional:")) return "nacional";
   if (WTT_EVENT.test(lower)) return "wtt";
   if (
     NACIONAL_EVENT.test(lower) ||
-    /\b(lima|santiago|havana|guaynabo|asunción|cartagena|san juan|toronto|santo domingo|rock hill|san salvador)\b/i
+    /\b(lima|santiago|havana|guaynabo|asunción|cartagena|san juan|toronto|santo domingo|rock hill|san salvador|suécia|suecia|sweden)\b/i
       .test(lower)
   ) {
     return "nacional";
@@ -298,13 +485,31 @@ function splitWikiParams(text: string): string[] {
   return parts;
 }
 
-function extractMedalTemplates(wikitext: string): Array<[string, string[]]> {
-  const results: Array<[string, string[]]> = [];
+function extractMedalsWithContext(
+  wikitext: string,
+): Array<[string | null, string, string[]]> {
+  const results: Array<[string | null, string, string[]]> = [];
+  let currentSection: string | null = null;
+  const compRe = /\{\{MedalCompetition\|([^{}]+)\}\}/gi;
   const opener = /\{\{(Medal(?:Gold|Silver|Bronze))\|/gi;
-  let match: RegExpExecArray | null;
-  while ((match = opener.exec(wikitext)) !== null) {
+
+  let pos = 0;
+  while (pos < wikitext.length) {
+    compRe.lastIndex = pos;
+    opener.lastIndex = pos;
+    const compM = compRe.exec(wikitext);
+    const medalM = opener.exec(wikitext);
+    if (!compM && !medalM) break;
+
+    if (compM && (!medalM || compM.index <= medalM.index)) {
+      currentSection = sectionCompetitionName(compM[1]);
+      pos = compM.index + compM[0].length;
+      continue;
+    }
+
+    if (!medalM) break;
     let depth = 2;
-    let i = match.index + match[0].length;
+    let i = medalM.index + medalM[0].length;
     let content = "";
     while (i < wikitext.length) {
       if (wikitext.startsWith("{{", i)) {
@@ -322,9 +527,9 @@ function extractMedalTemplates(wikitext: string): Array<[string, string[]]> {
       }
       content += wikitext[i++];
     }
-    const medalType = match[1];
-    const place = medalType.replace(/^Medal/i, "");
-    results.push([place, splitWikiParams(content)]);
+    const place = medalM[1].replace(/^Medal/i, "");
+    results.push([currentSection, place, splitWikiParams(content)]);
+    pos = i + 2;
   }
   return results;
 }
@@ -334,6 +539,7 @@ function formatWttEventName(event: string): string {
   cleaned = translateHighlight(cleaned);
   const lower = cleaned.toLowerCase();
   if (lower.includes("grand smash")) return "WTT Grand Smash";
+  if (lower.includes("europe smash")) return "WTT Grand Smash";
   if (lower.includes("star contender")) return "WTT Star Contender";
   if (lower.includes("contender")) return "WTT Contender";
   if (lower.includes("cup finals") || lower.includes("wtt finals")) return "WTT Finals";
@@ -355,6 +561,10 @@ function normalizeEventName(event: string): string {
   if (/world table tennis championship/i.test(cleaned)) return "Campeonato Mundial";
   if (/olympic/i.test(cleaned)) return "Olimpíadas";
   if (/pan american games/i.test(cleaned)) return "Jogos Pan-Americanos";
+  const lower = cleaned.toLowerCase();
+  if (lower.includes("europe smash") || /\b\w+\s+smash\b/i.test(lower)) {
+    return "WTT Grand Smash";
+  }
   cleaned = translateHighlight(cleaned);
   if (WTT_EVENT.test(cleaned)) return formatWttEventName(cleaned);
   return cleaned;
@@ -392,13 +602,42 @@ function resultToPt(result: string, event: string): string | null {
 
   const important = IMPORTANT_COMP.test(event);
   const wtt = WTT_EVENT.test(event);
+  const prestigious = PRESTIGIOUS_WTT.test(event);
 
   if (TITLE_RESULT.test(cleaned)) return "Campeão";
-  if (RUNNER_UP.test(cleaned)) return important && !wtt ? "2° lugar" : null;
-  if (BRONZE_RESULT.test(cleaned)) return important && !wtt ? "3° lugar" : null;
-  if (SEMIFINAL.test(cleaned)) return important ? "4° lugar" : null;
+  if (RUNNER_UP.test(cleaned)) {
+    if (important && !wtt) return "2° lugar";
+    if (prestigious || /wtt finals|grand smash|europe smash|wtt champions/i.test(event)) {
+      return "2° lugar";
+    }
+    return null;
+  }
+  if (BRONZE_RESULT.test(cleaned)) {
+    if (important && !wtt) return "3° lugar";
+    if (prestigious) return "3° lugar";
+    return null;
+  }
+  if (SEMIFINAL.test(cleaned)) return important || prestigious ? "4° lugar" : null;
   if (QUARTERFINAL.test(cleaned)) return important ? "5-8° lugar" : null;
   return null;
+}
+
+function formatNationalBullet(
+  event: string,
+  resultPt: string,
+  detail: string,
+): string | null {
+  let country: string | null = null;
+  for (const [pattern, ptCountry] of NATIONAL_COUNTRY_FROM_EVENT) {
+    if (pattern.test(event)) {
+      country = ptCountry;
+      break;
+    }
+  }
+  if (!country) return null;
+  const year = yearFromParts(detail) ?? "?";
+  const category = inferBulletCategory(event, detail) ?? "Simples";
+  return `Nacional: ${resultPt} (${country} ${year} — ${category})`;
 }
 
 function formatBulletTitle(
@@ -406,9 +645,23 @@ function formatBulletTitle(
   resultPt: string,
   detail: string,
 ): string | null {
-  const eventName = normalizeEventName(event);
-  const cleanedDetail = localizePlace(cleanWikiText(detail));
-  const year = yearFromParts(cleanedDetail) ?? "?";
+  if (NATIONAL_CHAMP.test(event)) {
+    return formatNationalBullet(event, resultPt, detail);
+  }
+
+  const [eventName, eventLoc] = extractEventLocationFromName(event);
+  const detailClean = localizePlace(cleanWikiText(detail));
+  let year = yearFromParts(detailClean) ?? "?";
+  let category = inferBulletCategory(event, detailClean) ?? "Simples";
+  const locCheck =
+    eventLoc ??
+    (year !== "?" ? detailClean.replace(year, "", 1).trim() : detailClean);
+  if (isInvalidMacau2025Singles(year, locCheck, category, `${eventName} ${detailClean}`)) {
+    if (eventName === "Copa do Mundo") return null;
+  }
+
+  const cleanedDetail = detailClean;
+  year = yearFromParts(cleanedDetail) ?? "?";
   const remainder = year !== "?"
     ? (() => {
       const idx = cleanedDetail.indexOf(year);
@@ -419,11 +672,17 @@ function formatBulletTitle(
     : cleanedDetail;
   if (year !== "?" && (!remainder || remainder === year)) {
     if (/pan-americano|campeonato mundial|copa do mundo/i.test(eventName)) return null;
-    const line = `${eventName}: ${resultPt} (${year})`;
-    return translateHighlight(line);
+    const location = eventLoc ?? defaultLocationForEvent(eventName, year, event);
+    if (location !== "?") {
+      category = inferBulletCategory(event, cleanedDetail) ?? "Simples";
+      return translateHighlight(
+        `${eventName}: ${resultPt} (${location} ${year} — ${category})`,
+      );
+    }
+    return translateHighlight(`${eventName}: ${resultPt} (${year})`);
   }
-  const location = remainder || cleanedDetail || year;
-  const category = inferBulletCategory(event, cleanedDetail);
+  const location = localizePlace(remainder) || eventLoc || cleanedDetail || year;
+  category = inferBulletCategory(event, cleanedDetail);
   const line = category
     ? `${eventName}: ${resultPt} (${location} ${year} — ${category})`
     : `${eventName}: ${resultPt} (${location} ${year})`;
@@ -436,8 +695,23 @@ function isRelevantWikiEvent(event: string): boolean {
     WTT_EVENT.test(cleaned) ||
     IMPORTANT_COMP.test(cleaned) ||
     NACIONAL_EVENT.test(cleaned) ||
-    /pan.?american|world cup|grand smash|smash|contender|olympic|mundial/i.test(cleaned)
+    NATIONAL_CHAMP.test(cleaned) ||
+    /pan.?american|world cup|grand smash|smash|contender|olympic|mundial|europe smash/i.test(
+      cleaned,
+    )
   );
+}
+
+function splitBulletEventRest(body: string): [string | null, string | null] {
+  if (body.includes(":")) {
+    const idx = body.indexOf(":");
+    return [body.slice(0, idx).trim(), body.slice(idx + 1).trim()];
+  }
+  const dash = body.match(/\s[-–—]\s/);
+  if (dash && dash.index != null) {
+    return [body.slice(0, dash.index).trim(), body.slice(dash.index + dash[0].length).trim()];
+  }
+  return [null, null];
 }
 
 function parseWikiBulletLine(line: string): string[] {
@@ -455,12 +729,9 @@ function parseWikiBulletLine(line: string): string[] {
   body = body.replace(WIKI_REF, "");
   body = cleanWikiText(body);
   if (!body || RAW_URL.test(body) || JUNK_TEXT.test(body)) return [];
-  if (!body.includes(":")) return [];
-
-  const colon = body.indexOf(":");
-  const event = body.slice(0, colon).trim();
-  const rest = body.slice(colon + 1).trim();
-  if (!event || !rest || !isRelevantWikiEvent(event)) return [];
+  const [event, rest] = splitBulletEventRest(body);
+  if (!event || !rest) return [];
+  if (!isRelevantWikiEvent(event) && !NATIONAL_CHAMP.test(event)) return [];
 
   const parenMatch = rest.match(/\(([^)]+)\)/);
   if (!parenMatch || parenMatch.index == null) return [];
@@ -474,6 +745,44 @@ function parseWikiBulletLine(line: string): string[] {
   for (const detail of expandParentheticalEntries(detailsRaw)) {
     const formatted = formatBulletTitle(event, resultPt, detail);
     if (formatted) titles.push(formatted);
+  }
+  return titles;
+}
+
+function parseNotableResultsTable(wikitext: string): string[] {
+  const titles: string[] = [];
+  let currentYear: string | null = null;
+
+  for (const line of wikitext.split("\n")) {
+    const rowSpan = line.match(/rowspan="\d+"\|(\d{4})/);
+    if (rowSpan) currentYear = rowSpan[1];
+    if (!currentYear) continue;
+    if (!line.trim().startsWith("|-") && !rowSpan) continue;
+
+    const cells = line
+      .split("|")
+      .map((c) => cleanWikiText(c.trim()))
+      .filter((c) => c && c !== "-" && !c.startsWith('rowspan="'));
+    let eventRaw = "";
+    if (rowSpan && cells.length >= 2) {
+      eventRaw = cells[0] === currentYear ? cells[1] : cells[0];
+    } else if (line.trim().startsWith("|-") && cells.length >= 1) {
+      eventRaw = cells[0];
+    } else {
+      continue;
+    }
+
+    if (!eventRaw || !isRelevantWikiEvent(eventRaw) || PARTICIPATION_ONLY.test(eventRaw)) {
+      continue;
+    }
+    const compName = normalizeEventName(eventRaw);
+    const location = defaultLocationForEvent(compName, currentYear, eventRaw);
+    const category = inferBulletCategory(eventRaw, eventRaw) ?? "Simples";
+    if (location !== "?") {
+      titles.push(`${compName}: Campeão (${location} ${currentYear} — ${category})`);
+    } else {
+      titles.push(`${compName}: Campeão (${currentYear} — ${category})`);
+    }
   }
   return titles;
 }
@@ -497,6 +806,17 @@ function parseWikiProseTitles(wikitext: string): string[] {
     titles.push("Pan-Americano: Campeão (Rock Hill 2025 — Duplas mistas)");
   }
 
+  const finalsYears = plain.match(
+    /won the men's singles title at the WTT Finals in ((?:\d{4},?\s*(?:and\s*)?)+)/i,
+  );
+  if (finalsYears) {
+    for (const year of finalsYears[1].match(/\d{4}/g) ?? []) {
+      const loc = WTT_FINALS_DEFAULT_LOCATION[year] ?? "Hong Kong";
+      titles.push(`WTT Finals: Campeão (${loc} ${year} — Simples)`);
+    }
+  }
+
+  titles.push(...parseNotableResultsTable(wikitext));
   return titles;
 }
 
@@ -535,11 +855,13 @@ function isJunkTitle(text: string): boolean {
   if (text.startsWith("Último resultado:")) return true;
   if (/^\d{4}\s+(Ouro|Prata|Bronze)\s+—/.test(text)) return true;
   if (text.startsWith("WTT Star Contender: Campeão") && !text.includes("(")) return true;
+  if (PARTICIPATION_ONLY.test(text) && !/campeão|2° lugar/i.test(text)) return true;
   return false;
 }
 
 function normalizeIdentityEvent(event: string): string {
   const lower = event.toLowerCase();
+  if (lower.startsWith("nacional")) return "nacional";
   if (lower.includes("campeonato mundial") || lower.includes("world table tennis")) {
     return "campeonato mundial";
   }
@@ -549,8 +871,11 @@ function normalizeIdentityEvent(event: string): string {
   if (lower.includes("copa do mundo") || lower.includes("world cup")) {
     return "copa do mundo";
   }
-  if (lower.includes("wtt grand smash") || lower.includes("grand smash")) {
+  if (lower.includes("wtt grand smash") || lower.includes("grand smash") || lower.includes("europe smash")) {
     return "wtt grand smash";
+  }
+  if (lower.includes("wtt finals") || lower.includes("cup finals")) {
+    return "wtt finals";
   }
   if (lower.includes("wtt star contender")) return "wtt star contender";
   if (lower.includes("wtt contender")) return "wtt contender";
@@ -685,8 +1010,8 @@ async function titlesFromWikipedia(playerName: string): Promise<string[]> {
       | undefined;
     if (!wikitext) return titles;
 
-    for (const [medalPlace, params] of extractMedalTemplates(wikitext)) {
-      const formatted = formatMedalLine(medalPlace, params);
+    for (const [sectionComp, medalPlace, params] of extractMedalsWithContext(wikitext)) {
+      const formatted = formatMedalLine(medalPlace, params, sectionComp);
       if (formatted) titles.push(formatted);
     }
 
