@@ -34,6 +34,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   bool _notesChanged = false;
 
   int? _fromYear;
+  TitleCategory _titleCategory = TitleCategory.all;
   Athlete? _opponent;
   HeadToHeadSummary? _h2hSummary;
   bool _h2hLoading = false;
@@ -402,11 +403,13 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   }
 
   Widget _buildTitlesSection(Athlete athlete) {
-    final allTitles = athlete.championshipsWon
-        .map(TitleUtils.translateHighlight)
-        .toList();
+    final allTitles = athlete.championshipsWon;
     final years = TitleUtils.availableYears(allTitles);
-    final filtered = TitleUtils.filterFromYear(allTitles, _fromYear);
+    final displayed = TitleUtils.buildDisplayTitles(
+      allTitles,
+      fromYear: _fromYear,
+      category: _titleCategory,
+    );
 
     return Card(
       child: Padding(
@@ -419,10 +422,12 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const Divider(),
-            Row(
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                const Text('A partir de: '),
-                const SizedBox(width: 8),
+                const Text('A partir de:'),
                 DropdownButton<int?>(
                   value: _fromYear,
                   hint: const Text('Todos'),
@@ -440,27 +445,57 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
                   ],
                   onChanged: (value) => setState(() => _fromYear = value),
                 ),
+                const Text('Categoria:'),
+                DropdownButton<TitleCategory>(
+                  value: _titleCategory,
+                  items: const [
+                    DropdownMenuItem(
+                      value: TitleCategory.all,
+                      child: Text('Todos'),
+                    ),
+                    DropdownMenuItem(
+                      value: TitleCategory.wtt,
+                      child: Text('WTT'),
+                    ),
+                    DropdownMenuItem(
+                      value: TitleCategory.nacional,
+                      child: Text('Nacionais'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _titleCategory = value);
+                    }
+                  },
+                ),
               ],
             ),
             const SizedBox(height: 8),
-            if (filtered.isEmpty)
+            if (displayed.isEmpty)
               Text(
-                _fromYear == null
+                _fromYear == null && _titleCategory == TitleCategory.all
                     ? 'Nenhum título cadastrado.'
-                    : 'Nenhum título a partir de $_fromYear.',
+                    : 'Nenhum título encontrado para os filtros selecionados.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
               )
             else
-              ...filtered.map(
+              ...displayed.map(
                 (title) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('• '),
-                      Expanded(child: Text(title)),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: TitleUtils.isWinLine(title)
+                              ? const TextStyle(fontWeight: FontWeight.bold)
+                              : null,
+                        ),
+                      ),
                     ],
                   ),
                 ),
