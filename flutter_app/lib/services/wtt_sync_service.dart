@@ -52,7 +52,8 @@ class WttSyncService {
       'https://wtt-website-api-prod-3-frontdoor-bddnb2haduafdze9.a01.azurefd.net/api/cms/PlayerCard/';
 
   Future<WttSyncResult> syncFromWtt({
-    void Function(String message, double progress)? onProgress,
+    void Function(String message, double progress, {String? subtitle})?
+        onProgress,
   }) async {
     if (kIsWeb) {
       return _syncViaEdgeFunction(onProgress);
@@ -92,8 +93,10 @@ class WttSyncService {
         processed++;
         final playerName = row['PlayerName']?.toString() ?? 'Atleta';
         onProgress?.call(
-          'Sincronizando $playerName...',
+          'Sincronizando $processed/$totalSteps atletas '
+          '(${((processed / totalSteps) * 100).round()}%)...',
           processed / totalSteps,
+          subtitle: playerName,
         );
 
         final ittfId = row['IttfId']?.toString() ?? '';
@@ -137,37 +140,72 @@ class WttSyncService {
     );
   }
 
+  static const _webBatchSize = 20;
+  static const _webTotalAthletes = 200;
+
   Future<WttSyncResult> _syncViaEdgeFunction(
-    void Function(String message, double progress)? onProgress,
+    void Function(String message, double progress, {String? subtitle})?
+        onProgress,
   ) async {
-    onProgress?.call(
-      'Sincronizando 200 atletas via servidor (evita bloqueio CORS)...',
-      0.1,
-    );
+    onProgress?.call('Preparando sincronização via servidor...', 0.02);
 
-    final response = await _client.functions.invoke(
-      'sync-wtt',
-      body: const {},
-    );
+    var processed = 0;
+    var totalChanged = 0;
+    var hasUpdates = false;
+    String? rankingWeek;
+    String? rankingYear;
 
-    if (response.status != 200) {
-      final details = response.data?.toString() ?? 'sem detalhes';
-      throw Exception('Falha na sincronização ($details)');
-    }
+    for (var offset = 0; offset < _webTotalAthletes; offset += _webBatchSize) {
+      final response = await _client.functions.invoke(
+        'sync-wtt',
+        body: {
+          'offset': offset,
+          'limit': _webBatchSize,
+        },
+      );
 
-    final data = Map<String, dynamic>.from(response.data as Map);
-    if (data['error'] != null) {
-      throw Exception(data['error'].toString());
+      if (response.status != 200) {
+        final details = response.data?.toString() ?? 'sem detalhes';
+        throw Exception('Falha na sincronização ($details)');
+      }
+
+      final data = Map<String, dynamic>.from(response.data as Map);
+      if (data['error'] != null) {
+        throw Exception(data['error'].toString());
+      }
+
+      processed = _parseInt(data['processed']) ?? processed;
+      final total = _parseInt(data['total']) ?? _webTotalAthletes;
+      totalChanged += _parseInt(data['athletesChanged']) ?? 0;
+      hasUpdates = hasUpdates || data['hasUpdates'] == true;
+      rankingWeek ??= data['rankingWeek']?.toString();
+      rankingYear ??= data['rankingYear']?.toString();
+
+      final progress = processed / total;
+      final percent = (progress * 100).round();
+      final athleteName = data['currentAthlete']?.toString();
+
+      onProgress?.call(
+        'Sincronizando $processed/$total atletas ($percent%)...',
+        progress.clamp(0.0, 0.99),
+        subtitle: athleteName != null && athleteName.isNotEmpty
+            ? athleteName
+            : null,
+      );
+
+      if (data['done'] == true || processed >= total) {
+        break;
+      }
     }
 
     onProgress?.call('Atualização concluída!', 1);
 
     return WttSyncResult(
-      athletesSynced: _parseInt(data['athletesSynced']) ?? 0,
-      rankingWeek: data['rankingWeek']?.toString(),
-      rankingYear: data['rankingYear']?.toString(),
-      hasUpdates: data['hasUpdates'] == true,
-      athletesChanged: _parseInt(data['athletesChanged']) ?? 0,
+      athletesSynced: processed,
+      rankingWeek: rankingWeek,
+      rankingYear: rankingYear,
+      hasUpdates: hasUpdates,
+      athletesChanged: totalChanged,
     );
   }
 

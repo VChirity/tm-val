@@ -470,6 +470,108 @@ async function wttGet(url: string): Promise<Response> {
   return fetch(`${url}${sep}q=${Date.now()}`, { headers: WTT_HEADERS });
 }
 
+const TOTAL_ATHLETES = 200;
+const ATHLETES_PER_GENDER = 100;
+
+type RankingTarget = {
+  row: Record<string, unknown>;
+  gender: string;
+};
+
+function collectAllTargets(
+  allRankings: Record<string, unknown>[],
+): RankingTarget[] {
+  const targets: RankingTarget[] = [];
+
+  for (const subEvent of ["MS", "WS"]) {
+    const gender = subEvent === "MS" ? "male" : "female";
+    const rows = allRankings
+      .filter((r) => r.SubEventCode === subEvent)
+      .sort(
+        (a, b) =>
+          (parseInt(a.CurrentRank) ?? 9999) - (parseInt(b.CurrentRank) ?? 9999),
+      )
+      .slice(0, ATHLETES_PER_GENDER);
+
+    for (const row of rows) {
+      targets.push({ row, gender });
+    }
+  }
+
+  return targets;
+}
+
+async function buildAthleteRecord(
+  row: Record<string, unknown>,
+  gender: string,
+): Promise<Record<string, unknown>> {
+  const ittfId = String(row.IttfId ?? "");
+  let profile: Record<string, unknown> = {};
+  let card: Record<string, unknown> = {};
+
+  if (ittfId) {
+    const profileResp = await wttGet(`${PLAYERS_URL}?IttfId=${ittfId}`);
+    if (profileResp.ok) {
+      const payload = await profileResp.json();
+      profile = (payload.Result?.[0] ?? {}) as Record<string, unknown>;
+    }
+    const cardResp = await wttGet(`${PLAYER_CARD_URL}${ittfId}`);
+    if (cardResp.ok) {
+      const payload = await cardResp.json();
+      if (payload.details) {
+        card = JSON.parse(payload.details);
+      }
+    }
+  }
+
+  const name = String(row.PlayerName ?? profile.PlayerName ?? "");
+  const cardTitles = titlesFromCard(card);
+  const wikiTitles = await titlesFromWiki(name);
+
+  const photo = profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL;
+  return {
+    name,
+    gender,
+    ittf_id: ittfId || null,
+    ranking: parseInt(row.CurrentRank ?? row.RankingPosition),
+    ranking_points: parseInt(
+      row.RankingPointsYTD ?? row.RankingPointsCareer,
+    ),
+    age: parseInt(profile.Age ?? row.Age),
+    height: parseFloat(card.Height ?? profile.Height),
+    hand: profile.Handedness ?? card.Hand ?? null,
+    championships_won: sortTitlesByYear(
+      mergeUnique(cardTitles, wikiTitles),
+    ),
+    photo_url: photo
+      ? String(photo)
+        .replace(
+          "https://wttsimfiles.blob.core.windows.net",
+          "https://photofiles.worldtabletennis.com",
+        )
+        .replace(
+          "https://wttnewtest.blob.core.windows.net",
+          "https://photofiles.worldtabletennis.com",
+        )
+      : null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function parseBatchParams(req: Request, body: Record<string, unknown>) {
+  const url = new URL(req.url);
+  const offsetRaw = body.offset ?? url.searchParams.get("offset");
+  const limitRaw = body.limit ?? url.searchParams.get("limit");
+
+  const offset = Math.max(0, parseInt(offsetRaw) ?? 0);
+  const limit = Math.min(
+    TOTAL_ATHLETES,
+    Math.max(1, parseInt(limitRaw) ?? TOTAL_ATHLETES),
+  );
+
+  return { offset, limit };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -480,6 +582,18 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
+    let body: Record<string, unknown> = {};
+    if (req.method === "POST") {
+      try {
+        body = (await req.json()) as Record<string, unknown>;
+      } catch {
+        body = {};
+      }
+    }
+
+    const { offset, limit } = parseBatchParams(req, body);
+    const batchEnd = Math.min(offset + limit, TOTAL_ATHLETES);
+
     const { data: existingRows, error: fetchErr } = await supabase.from("athletes")
       .select(
         "name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url",
@@ -501,91 +615,48 @@ Deno.serve(async (req: Request) => {
     const rankingPayload = await rankingResp.json();
     const allRankings = (rankingPayload.Result ?? []) as Record<string, unknown>[];
     const remoteMeta = allRankings[0] ?? {};
+    const allTargets = collectAllTargets(allRankings);
+    const batchTargets = allTargets.slice(offset, batchEnd);
 
     const athletes: Record<string, unknown>[] = [];
     let changedCount = 0;
+    let lastAthleteName: string | null = null;
 
-    for (const subEvent of ["MS", "WS"]) {
-      const gender = subEvent === "MS" ? "male" : "female";
-      const rows = allRankings
-        .filter((r) => r.SubEventCode === subEvent)
-        .sort(
-          (a, b) =>
-            (parseInt(a.CurrentRank) ?? 9999) - (parseInt(b.CurrentRank) ?? 9999),
-        )
-        .slice(0, 100);
+    for (const target of batchTargets) {
+      const record = await buildAthleteRecord(target.row, target.gender);
+      lastAthleteName = String(record.name ?? "");
 
-      for (const row of rows) {
-        const ittfId = String(row.IttfId ?? "");
-        let profile: Record<string, unknown> = {};
-        let card: Record<string, unknown> = {};
-
-        if (ittfId) {
-          const profileResp = await wttGet(`${PLAYERS_URL}?IttfId=${ittfId}`);
-          if (profileResp.ok) {
-            const payload = await profileResp.json();
-            profile = (payload.Result?.[0] ?? {}) as Record<string, unknown>;
-          }
-          const cardResp = await wttGet(`${PLAYER_CARD_URL}${ittfId}`);
-          if (cardResp.ok) {
-            const payload = await cardResp.json();
-            if (payload.details) {
-              card = JSON.parse(payload.details);
-            }
-          }
-        }
-
-        const name = String(row.PlayerName ?? profile.PlayerName ?? "");
-        const cardTitles = titlesFromCard(card);
-        const wikiTitles = await titlesFromWiki(name);
-
-        const photo = profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL;
-        const record: Record<string, unknown> = {
-          name,
-          gender,
-          ittf_id: ittfId || null,
-          ranking: parseInt(row.CurrentRank ?? row.RankingPosition),
-          ranking_points: parseInt(
-            row.RankingPointsYTD ?? row.RankingPointsCareer,
-          ),
-          age: parseInt(profile.Age ?? row.Age),
-          height: parseFloat(card.Height ?? profile.Height),
-          hand: profile.Handedness ?? card.Hand ?? null,
-          championships_won: sortTitlesByYear(
-            mergeUnique(cardTitles, wikiTitles),
-          ),
-          photo_url: photo
-            ? String(photo)
-              .replace(
-                "https://wttsimfiles.blob.core.windows.net",
-                "https://photofiles.worldtabletennis.com",
-              )
-              .replace(
-                "https://wttnewtest.blob.core.windows.net",
-                "https://photofiles.worldtabletennis.com",
-              )
-            : null,
-          updated_at: new Date().toISOString(),
-        };
-
-        const key = athleteKey(name, gender);
-        if (recordChanged(existingByKey.get(key), record)) {
-          changedCount++;
-        }
-        athletes.push(record);
+      const key = athleteKey(
+        String(record.name ?? ""),
+        String(record.gender ?? ""),
+      );
+      if (recordChanged(existingByKey.get(key), record)) {
+        changedCount++;
       }
+      athletes.push(record);
     }
 
-    const { error: upsertErr } = await supabase.from("athletes").upsert(
-      athletes,
-      { onConflict: "name,gender" },
-    );
-    if (upsertErr) throw upsertErr;
+    if (athletes.length > 0) {
+      const { error: upsertErr } = await supabase.from("athletes").upsert(
+        athletes,
+        { onConflict: "name,gender" },
+      );
+      if (upsertErr) throw upsertErr;
+    }
+
+    const processed = offset + athletes.length;
+    const total = allTargets.length || TOTAL_ATHLETES;
+    const done = processed >= total;
 
     return new Response(
       JSON.stringify({
         athletesSynced: athletes.length,
         athletesChanged: changedCount,
+        processed,
+        total,
+        offset,
+        done,
+        currentAthlete: lastAthleteName,
         rankingWeek: remoteMeta.RankingWeek ?? null,
         rankingYear: remoteMeta.RankingYear ?? null,
         hasUpdates: changedCount > 0 || (existingRows?.length ?? 0) === 0,
