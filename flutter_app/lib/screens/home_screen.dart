@@ -120,18 +120,17 @@ class _HomeScreenState extends State<HomeScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Dados atualizados! Semana ${result.rankingWeek ?? "?"} de '
-            '${result.rankingYear ?? "?"} — '
-            '${result.athletesSynced} atletas sincronizados'
-            '${result.athletesChanged > 0 ? " (${result.athletesChanged} com alterações)" : ""}.',
+            '${result.athletesChecked} atletas verificados, '
+            '${result.athletesChanged} alterados — '
+            'semana ${result.rankingWeek ?? "?"} de ${result.rankingYear ?? "?"}.',
           ),
         ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Nenhuma alteração detectada. Rankings e títulos já estão em dia.',
+            '${result.athletesChecked} atletas verificados — nada mudou.',
           ),
         ),
       );

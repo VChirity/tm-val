@@ -43,6 +43,29 @@ jobs:
           flutter pub get
           flutter build web --release --base-href="/${{ github.event.repository.name }}/"
 
+      - name: Preparar artefatos para GitHub Pages
+        run: |
+          BUILD_DIR="flutter_app/build/web"
+          touch "$BUILD_DIR/.nojekyll"
+          echo "Artefatos em $BUILD_DIR:"
+          ls -la "$BUILD_DIR" | head -20
+
+      - name: Verificar build antes de publicar
+        run: |
+          BUILD_DIR="flutter_app/build/web"
+          test -f "$BUILD_DIR/index.html" || { echo "FALHA: index.html ausente"; exit 1; }
+          test -f "$BUILD_DIR/.nojekyll" || { echo "FALHA: .nojekyll ausente"; exit 1; }
+          test -f "$BUILD_DIR/main.dart.js" || { echo "FALHA: main.dart.js ausente"; exit 1; }
+          JS_SIZE=$(stat -c%s "$BUILD_DIR/main.dart.js")
+          echo "main.dart.js: ${JS_SIZE} bytes"
+          test "$JS_SIZE" -gt 102400 || { echo "FALHA: main.dart.js muito pequeno (${JS_SIZE} bytes)"; exit 1; }
+          if grep -rq 'ljiib' "$BUILD_DIR"; then
+            echo "FALHA: typo Supabase URL 'ljiib' encontrado no build (deve ser 'ljib')"
+            grep -rl 'ljiib' "$BUILD_DIR" || true
+            exit 1
+          fi
+          echo "Verificação do build OK"
+
       - name: Publicar na branch gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
@@ -52,11 +75,18 @@ jobs:
           force_orphan: true
           commit_message: "Deploy TM Val ${{ github.sha }}"
 
-      - name: Apontar GitHub Pages para gh-pages
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Smoke test do site publicado
         run: |
-          gh api "repos/${{ github.repository }}/pages" -X PUT \
-            -f build_type=legacy \
-            -f 'source[branch]=gh-pages' \
-            -f 'source[path]=/' || true
+          SITE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          echo "Aguardando propagação em $SITE_URL"
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L "$SITE_URL" || echo "000")
+            echo "Tentativa $i: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Smoke test OK"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "AVISO: smoke test não retornou 200 (pages-build-deployment pode ainda estar em andamento)"
+          exit 0

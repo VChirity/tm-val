@@ -1,6 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { buildChampionships } from "./title_enrichment.ts";
 
 const WTT_HEADERS = {
   Accept: "application/json, text/plain, */*",
@@ -25,6 +24,9 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
+const TOTAL_ATHLETES = 200;
+const ATHLETES_PER_GENDER = 100;
+
 function parseInt(value: unknown): number | null {
   if (value == null || value === "") return null;
   const n = Number.parseFloat(String(value));
@@ -41,7 +43,43 @@ function athleteKey(name: string, gender: string) {
   return `${name}|${gender}`;
 }
 
-function recordChanged(
+function normalizePhotoUrl(url: unknown): string | null {
+  if (url == null || url === "") return null;
+  const text = String(url);
+  if (text.toLowerCase().includes("dummy")) return null;
+  return text
+    .replace(
+      "https://wttsimfiles.blob.core.windows.net",
+      "https://photofiles.worldtabletennis.com",
+    )
+    .replace(
+      "https://wttnewtest.blob.core.windows.net",
+      "https://photofiles.worldtabletennis.com",
+    );
+}
+
+function photoFromRankingRow(row: Record<string, unknown>): string | null {
+  const candidate = row.HeadshotR ??
+    row.HeadShot ??
+    row.HeadshotL ??
+    row.PlayerPhoto ??
+    row.PhotoUrl ??
+    row.HeadshotUrl;
+  return normalizePhotoUrl(candidate);
+}
+
+function recordChangedFast(
+  existing: Record<string, unknown> | undefined,
+  record: Record<string, unknown>,
+): boolean {
+  if (!existing) return true;
+  return existing.ranking !== record.ranking ||
+    existing.ranking_points !== record.ranking_points ||
+    String(existing.ittf_id ?? "") !== String(record.ittf_id ?? "") ||
+    String(existing.photo_url ?? "") !== String(record.photo_url ?? "");
+}
+
+function recordChangedFull(
   existing: Record<string, unknown> | undefined,
   record: Record<string, unknown>,
 ): boolean {
@@ -65,9 +103,6 @@ async function wttGet(url: string): Promise<Response> {
   const sep = url.includes("?") ? "&" : "?";
   return fetch(`${url}${sep}q=${Date.now()}`, { headers: WTT_HEADERS });
 }
-
-const TOTAL_ATHLETES = 200;
-const ATHLETES_PER_GENDER = 100;
 
 type RankingTarget = {
   row: Record<string, unknown>;
@@ -97,7 +132,36 @@ function collectAllTargets(
   return targets;
 }
 
-async function buildAthleteRecord(
+function buildAthleteRecordFast(
+  row: Record<string, unknown>,
+  gender: string,
+  existing?: Record<string, unknown>,
+): Record<string, unknown> {
+  const name = String(row.PlayerName ?? "");
+  const ittfId = String(row.IttfId ?? "");
+  const rankingPhoto = photoFromRankingRow(row);
+  const existingPhoto = existing?.photo_url != null
+    ? String(existing.photo_url)
+    : null;
+
+  return {
+    name,
+    gender,
+    ittf_id: ittfId || null,
+    ranking: parseInt(row.CurrentRank ?? row.RankingPosition),
+    ranking_points: parseInt(
+      row.RankingPointsYTD ?? row.RankingPointsCareer,
+    ),
+    age: parseInt(row.Age) ?? existing?.age ?? null,
+    height: existing?.height ?? null,
+    hand: existing?.hand ?? null,
+    championships_won: existing?.championships_won ?? [],
+    photo_url: rankingPhoto ?? existingPhoto,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function buildAthleteRecordFull(
   row: Record<string, unknown>,
   gender: string,
 ): Promise<Record<string, unknown>> {
@@ -121,7 +185,9 @@ async function buildAthleteRecord(
   }
 
   const name = String(row.PlayerName ?? profile.PlayerName ?? "");
-  const photo = profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL;
+  const photo = profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL ??
+    photoFromRankingRow(row);
+  const { buildChampionships } = await import("./title_enrichment.ts");
   return {
     name,
     gender,
@@ -134,17 +200,7 @@ async function buildAthleteRecord(
     height: parseFloat(card.Height ?? profile.Height),
     hand: profile.Handedness ?? card.Hand ?? null,
     championships_won: await buildChampionships(card, name),
-    photo_url: photo
-      ? String(photo)
-        .replace(
-          "https://wttsimfiles.blob.core.windows.net",
-          "https://photofiles.worldtabletennis.com",
-        )
-        .replace(
-          "https://wttnewtest.blob.core.windows.net",
-          "https://photofiles.worldtabletennis.com",
-        )
-      : null,
+    photo_url: normalizePhotoUrl(photo),
     updated_at: new Date().toISOString(),
   };
 }
@@ -161,6 +217,10 @@ function parseBatchParams(req: Request, body: Record<string, unknown>) {
   );
 
   return { offset, limit };
+}
+
+function isFullMode(body: Record<string, unknown>): boolean {
+  return body.full === true || body.mode === "full";
 }
 
 Deno.serve(async (req: Request) => {
@@ -182,8 +242,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const { offset, limit } = parseBatchParams(req, body);
-    const batchEnd = Math.min(offset + limit, TOTAL_ATHLETES);
+    const fullMode = isFullMode(body);
 
     const { data: existingRows, error: fetchErr } = await supabase.from("athletes")
       .select(
@@ -207,6 +266,61 @@ Deno.serve(async (req: Request) => {
     const allRankings = (rankingPayload.Result ?? []) as Record<string, unknown>[];
     const remoteMeta = allRankings[0] ?? {};
     const allTargets = collectAllTargets(allRankings);
+
+    if (!fullMode) {
+      const athletesToUpsert: Record<string, unknown>[] = [];
+      let changedCount = 0;
+
+      for (const target of allTargets) {
+        const name = String(target.row.PlayerName ?? "");
+        const key = athleteKey(name, target.gender);
+        const existing = existingByKey.get(key);
+        const record = buildAthleteRecordFast(
+          target.row,
+          target.gender,
+          existing,
+        );
+
+        if (recordChangedFast(existing, record)) {
+          changedCount++;
+          athletesToUpsert.push(record);
+        }
+      }
+
+      if (athletesToUpsert.length > 0) {
+        const { error: upsertErr } = await supabase.from("athletes").upsert(
+          athletesToUpsert,
+          { onConflict: "name,gender" },
+        );
+        if (upsertErr) throw upsertErr;
+      }
+
+      const total = allTargets.length || TOTAL_ATHLETES;
+
+      return new Response(
+        JSON.stringify({
+          mode: "fast",
+          athletesSynced: athletesToUpsert.length,
+          athletesChanged: changedCount,
+          processed: total,
+          total,
+          done: true,
+          rankingWeek: remoteMeta.RankingWeek ?? null,
+          rankingYear: remoteMeta.RankingYear ?? null,
+          hasUpdates: changedCount > 0 || (existingRows?.length ?? 0) === 0,
+        }),
+        {
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+            "Connection": "keep-alive",
+          },
+        },
+      );
+    }
+
+    const { offset, limit } = parseBatchParams(req, body);
+    const batchEnd = Math.min(offset + limit, TOTAL_ATHLETES);
     const batchTargets = allTargets.slice(offset, batchEnd);
 
     const athletes: Record<string, unknown>[] = [];
@@ -214,14 +328,14 @@ Deno.serve(async (req: Request) => {
     let lastAthleteName: string | null = null;
 
     for (const target of batchTargets) {
-      const record = await buildAthleteRecord(target.row, target.gender);
+      const record = await buildAthleteRecordFull(target.row, target.gender);
       lastAthleteName = String(record.name ?? "");
 
       const key = athleteKey(
         String(record.name ?? ""),
         String(record.gender ?? ""),
       );
-      if (recordChanged(existingByKey.get(key), record)) {
+      if (recordChangedFull(existingByKey.get(key), record)) {
         changedCount++;
       }
       athletes.push(record);
@@ -241,6 +355,7 @@ Deno.serve(async (req: Request) => {
 
     return new Response(
       JSON.stringify({
+        mode: "full",
         athletesSynced: athletes.length,
         athletesChanged: changedCount,
         processed,
