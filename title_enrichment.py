@@ -571,7 +571,9 @@ def _normalize_event_name(event: str) -> str:
     event = clean_wiki_text(event)
     if re.search(r"pan.?american.*championship", event, re.I):
         return "Pan-Americano"
-    if re.search(r"table tennis world cup", event, re.I):
+    if re.search(r"table tennis world cup|ittf world cup", event, re.I):
+        if year_from_parts(event) == "2025" and re.search(r"macao|macau", event, re.I):
+            return "WTT Champions"
         return "Copa do Mundo"
     if re.search(r"world table tennis championship", event, re.I):
         return "Campeonato Mundial"
@@ -773,6 +775,35 @@ def _parse_wiki_bullet_line(line: str) -> list[str]:
     return titles
 
 
+def _format_table_winner_title(
+    event_raw: str,
+    year: str,
+    default_category: str = "Simples",
+) -> str | None:
+    category = _infer_bullet_category(event_raw, event_raw) or default_category
+    _, event_loc = _extract_event_location_from_name(event_raw)
+    comp_guess = _normalize_event_name(event_raw)
+    location = event_loc or _default_location_for_event(comp_guess, year, event_raw)
+    if location == "?":
+        location = _extract_location(event_raw, "", year)
+    comp_name = _resolve_competition_name(event_raw, "", event_raw, year, location)
+    if location == "?" and comp_name in {"WTT Finals", "WTT Grand Smash", "WTT Champions"}:
+        location = _default_location_for_event(comp_name, year, event_raw)
+    if (
+        year == "2025"
+        and location in ("Macau", "Macao")
+        and comp_name == "Copa do Mundo"
+        and category == "Simples"
+    ):
+        comp_name = "WTT Champions"
+    if _is_invalid_macau_2025_singles(year, location, category, event_raw):
+        if comp_name == "Copa do Mundo":
+            comp_name = "WTT Champions"
+    if location != "?":
+        return f"{comp_name}: Campeão ({location} {year} — {category})"
+    return f"{comp_name}: Campeão ({year} — {category})"
+
+
 def _parse_notable_results_table(wikitext: str) -> list[str]:
     titles: list[str] = []
     current_year: str | None = None
@@ -801,13 +832,9 @@ def _parse_notable_results_table(wikitext: str) -> list[str]:
         if PARTICIPATION_ONLY.search(event_raw):
             continue
 
-        comp_name = _normalize_event_name(event_raw)
-        location = _default_location_for_event(comp_name, current_year, event_raw)
-        category = _infer_bullet_category(event_raw, event_raw) or "Simples"
-        if location != "?":
-            titles.append(f"{comp_name}: Campeão ({location} {current_year} — {category})")
-        else:
-            titles.append(f"{comp_name}: Campeão ({current_year} — {category})")
+        formatted = _format_table_winner_title(event_raw, current_year)
+        if formatted:
+            titles.append(formatted)
 
     return titles
 
@@ -857,14 +884,21 @@ def _parse_singles_titles_table(wikitext: str) -> list[str]:
         if not _is_relevant_wiki_event(event_raw) and not WTT_EVENT.search(event_raw):
             continue
 
-        comp_name = _normalize_event_name(event_raw)
-        location = _default_location_for_event(comp_name, current_year, event_raw)
-        if location != "?":
-            titles.append(f"{comp_name}: Campeão ({location} {current_year} — Simples)")
-        else:
-            titles.append(f"{comp_name}: Campeão ({current_year} — Simples)")
+        formatted = _format_table_winner_title(event_raw, current_year)
+        if formatted:
+            titles.append(formatted)
 
     return titles
+
+
+def _is_invalid_macau_2025_world_cup_title(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "copa do mundo" in lower
+        and "macau" in lower
+        and "2025" in lower
+        and "simples" in lower
+    )
 
 
 def _parse_wiki_prose_titles(wikitext: str) -> list[str]:
@@ -1086,6 +1120,8 @@ def merge_titles(*sources: list[str]) -> list[str]:
                 continue
             if _is_generic_card_highlight(text):
                 continue
+            if _is_invalid_macau_2025_world_cup_title(text):
+                text = re.sub(r"^Copa do Mundo:", "WTT Champions:", text, count=1)
 
             key = _title_identity(text)
             priority = _title_priority(text)

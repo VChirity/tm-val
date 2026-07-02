@@ -557,7 +557,12 @@ function formatWttEventName(event: string): string {
 function normalizeEventName(event: string): string {
   let cleaned = cleanWikiText(event);
   if (/pan.?american.*championship/i.test(cleaned)) return "Pan-Americano";
-  if (/table tennis world cup/i.test(cleaned)) return "Copa do Mundo";
+  if (/table tennis world cup|ittf world cup/i.test(cleaned)) {
+    if (yearFromParts(cleaned) === "2025" && /macao|macau/i.test(cleaned)) {
+      return "WTT Champions";
+    }
+    return "Copa do Mundo";
+  }
   if (/world table tennis championship/i.test(cleaned)) return "Campeonato Mundial";
   if (/olympic/i.test(cleaned)) return "Olimpíadas";
   if (/pan american games/i.test(cleaned)) return "Jogos Pan-Americanos";
@@ -749,6 +754,54 @@ function parseWikiBulletLine(line: string): string[] {
   return titles;
 }
 
+function formatTableWinnerTitle(
+  eventRaw: string,
+  year: string,
+  defaultCategory = "Simples",
+): string | null {
+  const category = inferBulletCategory(eventRaw, eventRaw) ?? defaultCategory;
+  const [, eventLoc] = extractEventLocationFromName(eventRaw);
+  const compGuess = normalizeEventName(eventRaw);
+  let location = eventLoc ?? defaultLocationForEvent(compGuess, year, eventRaw);
+  if (location === "?") {
+    location = extractLocation(eventRaw, "", year);
+  }
+  const compName = resolveCompetitionName(eventRaw, "", eventRaw, year, location);
+  if (
+    location === "?" &&
+    ["WTT Finals", "WTT Grand Smash", "WTT Champions"].includes(compName)
+  ) {
+    location = defaultLocationForEvent(compName, year, eventRaw);
+  }
+  if (
+    year === "2025" &&
+    (location === "Macau" || location === "Macao") &&
+    compName === "Copa do Mundo" &&
+    category === "Simples"
+  ) {
+    return `WTT Champions: Campeão (${location} ${year} — ${category})`;
+  }
+  if (isInvalidMacau2025Singles(year, location, category, eventRaw)) {
+    if (compName === "Copa do Mundo") {
+      return `WTT Champions: Campeão (${location !== "?" ? `${location} ${year}` : year} — ${category})`;
+    }
+  }
+  if (location !== "?") {
+    return `${compName}: Campeão (${location} ${year} — ${category})`;
+  }
+  return `${compName}: Campeão (${year} — ${category})`;
+}
+
+function isInvalidMacau2025WorldCupTitle(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("copa do mundo") &&
+    lower.includes("macau") &&
+    lower.includes("2025") &&
+    lower.includes("simples")
+  );
+}
+
 function parseNotableResultsTable(wikitext: string): string[] {
   const titles: string[] = [];
   let currentYear: string | null = null;
@@ -775,14 +828,54 @@ function parseNotableResultsTable(wikitext: string): string[] {
     if (!eventRaw || !isRelevantWikiEvent(eventRaw) || PARTICIPATION_ONLY.test(eventRaw)) {
       continue;
     }
-    const compName = normalizeEventName(eventRaw);
-    const location = defaultLocationForEvent(compName, currentYear, eventRaw);
-    const category = inferBulletCategory(eventRaw, eventRaw) ?? "Simples";
-    if (location !== "?") {
-      titles.push(`${compName}: Campeão (${location} ${currentYear} — ${category})`);
-    } else {
-      titles.push(`${compName}: Campeão (${currentYear} — ${category})`);
+    const formatted = formatTableWinnerTitle(eventRaw, currentYear);
+    if (formatted) titles.push(formatted);
+  }
+  return titles;
+}
+
+function parseSinglesTitlesTable(wikitext: string): string[] {
+  const titles: string[] = [];
+  let inTable = false;
+  let currentYear: string | null = null;
+
+  for (const line of wikitext.split("\n")) {
+    if (line.includes("==Singles titles==")) {
+      inTable = true;
+      continue;
     }
+    if (inTable && line.startsWith("==") && !line.includes("Singles titles")) break;
+    if (!inTable) continue;
+
+    const rowSpan = line.match(/rowspan="\d+"\|(\d{4})/);
+    if (rowSpan) currentYear = rowSpan[1];
+
+    const stripped = line.trim();
+    if (!stripped.startsWith("|") || stripped === "|-" || stripped === "|}") continue;
+
+    const cells = stripped
+      .split("|")
+      .map((c) => cleanWikiText(c.trim()))
+      .filter((c) => c && c !== "-" && !c.startsWith('rowspan="'));
+    if (!cells.length) continue;
+
+    let eventRaw = "";
+    if (/^\d{4}$/.test(cells[0])) {
+      currentYear = cells[0];
+      if (cells.length < 2) continue;
+      eventRaw = cells[1];
+    } else if (currentYear) {
+      eventRaw = cells[0];
+    } else {
+      continue;
+    }
+
+    if (!eventRaw || /^\d{4}$/.test(eventRaw)) continue;
+    if (/final opponent|score|ref|tournament/i.test(eventRaw)) continue;
+    if (!isRelevantWikiEvent(eventRaw) && !WTT_EVENT.test(eventRaw)) continue;
+
+    const formatted = formatTableWinnerTitle(eventRaw, currentYear);
+    if (formatted) titles.push(formatted);
   }
   return titles;
 }
@@ -817,6 +910,7 @@ function parseWikiProseTitles(wikitext: string): string[] {
   }
 
   titles.push(...parseNotableResultsTable(wikitext));
+  titles.push(...parseSinglesTitlesTable(wikitext));
   return titles;
 }
 
@@ -923,9 +1017,12 @@ function mergeTitles(...sources: string[][]): string[] {
 
   for (const source of sources) {
     for (const raw of source) {
-      const text = translateHighlight(cleanWikiText(raw.trim()));
+      let text = translateHighlight(cleanWikiText(raw.trim()));
       if (isJunkTitle(text)) continue;
       if (isGenericCardHighlight(text)) continue;
+      if (isInvalidMacau2025WorldCupTitle(text)) {
+        text = text.replace(/^Copa do Mundo:/, "WTT Champions:");
+      }
 
       const key = titleIdentity(text);
       const priority = titlePriority(text);
