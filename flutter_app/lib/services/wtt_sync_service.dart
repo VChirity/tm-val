@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -53,6 +54,10 @@ class WttSyncService {
   Future<WttSyncResult> syncFromWtt({
     void Function(String message, double progress)? onProgress,
   }) async {
+    if (kIsWeb) {
+      return _syncViaEdgeFunction(onProgress);
+    }
+
     onProgress?.call('Consultando rankings na WTT...', 0.05);
 
     final existingRows = await _fetchExistingAthletes();
@@ -129,6 +134,40 @@ class WttSyncService {
       rankingYear: remoteMeta?.year,
       hasUpdates: changedCount > 0 || rankingChanged,
       athletesChanged: changedCount,
+    );
+  }
+
+  Future<WttSyncResult> _syncViaEdgeFunction(
+    void Function(String message, double progress)? onProgress,
+  ) async {
+    onProgress?.call(
+      'Sincronizando 200 atletas via servidor (evita bloqueio CORS)...',
+      0.1,
+    );
+
+    final response = await _client.functions.invoke(
+      'sync-wtt',
+      body: const {},
+    );
+
+    if (response.status != 200) {
+      final details = response.data?.toString() ?? 'sem detalhes';
+      throw Exception('Falha na sincronização ($details)');
+    }
+
+    final data = Map<String, dynamic>.from(response.data as Map);
+    if (data['error'] != null) {
+      throw Exception(data['error'].toString());
+    }
+
+    onProgress?.call('Atualização concluída!', 1);
+
+    return WttSyncResult(
+      athletesSynced: _parseInt(data['athletesSynced']) ?? 0,
+      rankingWeek: data['rankingWeek']?.toString(),
+      rankingYear: data['rankingYear']?.toString(),
+      hasUpdates: data['hasUpdates'] == true,
+      athletesChanged: _parseInt(data['athletesChanged']) ?? 0,
     );
   }
 
