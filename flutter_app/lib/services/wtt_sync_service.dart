@@ -14,6 +14,7 @@ class WttSyncResult {
     required this.hasUpdates,
     required this.athletesChanged,
     required this.athletesChecked,
+    this.titlesChanged = 0,
   });
 
   final int athletesSynced;
@@ -22,6 +23,7 @@ class WttSyncResult {
   final bool hasUpdates;
   final int athletesChanged;
   final int athletesChecked;
+  final int titlesChanged;
 }
 
 class WttSyncService {
@@ -46,6 +48,7 @@ class WttSyncService {
 
   static const _athletesPerGender = 100;
   static const _totalAthletes = 200;
+  static const _webBatchSize = 25;
 
   Future<WttSyncResult> syncFromWtt({
     void Function(String message, double progress, {String? subtitle})?
@@ -62,44 +65,94 @@ class WttSyncService {
     void Function(String message, double progress, {String? subtitle})?
         onProgress,
   ) async {
-    onProgress?.call('Consultando ranking na WTT...', 0.1);
+    onProgress?.call('Atualizando rankings...', 0.05);
 
-    final response = await _client.functions.invoke(
+    final rankingResponse = await _client.functions.invoke(
       'sync-wtt',
       body: const {'fast': true},
     );
 
-    onProgress?.call('Comparando com o banco de dados...', 0.6);
-
-    if (response.status != 200) {
-      final details = response.data?.toString() ?? 'sem detalhes';
-      throw Exception('Falha na sincronização ($details)');
+    if (rankingResponse.status != 200) {
+      final details = rankingResponse.data?.toString() ?? 'sem detalhes';
+      throw Exception('Falha ao atualizar rankings ($details)');
     }
 
-    final data = Map<String, dynamic>.from(response.data as Map);
-    if (data['error'] != null) {
-      throw Exception(data['error'].toString());
+    final rankingData =
+        Map<String, dynamic>.from(rankingResponse.data as Map);
+    if (rankingData['error'] != null) {
+      throw Exception(rankingData['error'].toString());
     }
 
-    final total = _parseInt(data['total']) ?? _totalAthletes;
-    final changed = _parseInt(data['athletesChanged']) ?? 0;
-    final synced = _parseInt(data['athletesSynced']) ?? 0;
-    final hasUpdates = data['hasUpdates'] == true;
+    final rankingChanged = _parseInt(rankingData['athletesChanged']) ?? 0;
+    var rankingWeek = rankingData['rankingWeek']?.toString();
+    var rankingYear = rankingData['rankingYear']?.toString();
+    var titlesChanged = 0;
+    var processed = 0;
+    const total = _totalAthletes;
 
-    onProgress?.call(
-      changed > 0
-          ? '$total atletas verificados, $changed alterados'
-          : '$total atletas verificados, nada mudou',
-      1,
-    );
+    onProgress?.call('Rankings ok. Atualizando títulos 0/$total...', 0.12);
+
+    for (var offset = 0; offset < total; offset += _webBatchSize) {
+      final response = await _client.functions.invoke(
+        'sync-wtt',
+        body: {
+          'mode': 'titles',
+          'offset': offset,
+          'limit': _webBatchSize,
+        },
+      );
+
+      if (response.status != 200) {
+        final details = response.data?.toString() ?? 'sem detalhes';
+        throw Exception('Falha ao atualizar títulos ($details)');
+      }
+
+      final data = Map<String, dynamic>.from(response.data as Map);
+      if (data['error'] != null) {
+        throw Exception(data['error'].toString());
+      }
+
+      processed = _parseInt(data['processed']) ?? processed;
+      titlesChanged += _parseInt(data['titlesChanged']) ??
+          _parseInt(data['athletesChanged']) ??
+          0;
+      rankingWeek ??= data['rankingWeek']?.toString();
+      rankingYear ??= data['rankingYear']?.toString();
+
+      final progress = 0.12 + (processed / total) * 0.88;
+      final percent = (progress * 100).round();
+      final athleteName = data['currentAthlete']?.toString();
+
+      onProgress?.call(
+        'Atualizando títulos $processed/$total ($percent%)...',
+        progress.clamp(0.0, 0.99),
+        subtitle: athleteName != null && athleteName.isNotEmpty
+            ? athleteName
+            : null,
+      );
+
+      if (data['done'] == true || processed >= total) {
+        break;
+      }
+    }
+
+    final hasUpdates = rankingChanged > 0 || titlesChanged > 0;
+    final summary = titlesChanged > 0
+        ? '$total atletas — $rankingChanged ranking(s), $titlesChanged título(s)'
+        : rankingChanged > 0
+            ? '$total atletas — $rankingChanged ranking(s) alterados'
+            : '$total atletas verificados — nada mudou';
+
+    onProgress?.call(summary, 1);
 
     return WttSyncResult(
-      athletesSynced: synced,
-      rankingWeek: data['rankingWeek']?.toString(),
-      rankingYear: data['rankingYear']?.toString(),
+      athletesSynced: rankingChanged + titlesChanged,
+      rankingWeek: rankingWeek,
+      rankingYear: rankingYear,
       hasUpdates: hasUpdates,
-      athletesChanged: changed,
+      athletesChanged: rankingChanged + titlesChanged,
       athletesChecked: total,
+      titlesChanged: titlesChanged,
     );
   }
 

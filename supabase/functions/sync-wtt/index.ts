@@ -223,6 +223,61 @@ function isFullMode(body: Record<string, unknown>): boolean {
   return body.full === true || body.mode === "full";
 }
 
+function isTitlesMode(body: Record<string, unknown>): boolean {
+  return body.titles === true || body.mode === "titles";
+}
+
+const SUMMARY_LINE =
+  /^(Títulos em simples|Títulos em duplas|Títulos na carreira|Último resultado:)/i;
+
+function preserveSummaryLines(existing?: Record<string, unknown>): string[] {
+  const arr = (existing?.championships_won as string[] | null) ?? [];
+  return arr.filter((line) => SUMMARY_LINE.test(String(line)));
+}
+
+function championshipsEqual(a: unknown, b: unknown): boolean {
+  const la = (a as string[] | null)?.map(String) ?? [];
+  const lb = (b as string[] | null)?.map(String) ?? [];
+  return la.length === lb.length && la.every((v, i) => v === lb[i]);
+}
+
+async function buildAthleteRecordTitles(
+  row: Record<string, unknown>,
+  gender: string,
+  existing?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const name = String(row.PlayerName ?? existing?.name ?? "");
+  const { buildChampionships } = await import("./title_enrichment.ts");
+  const fresh = await buildChampionships({}, name);
+  const eventLines = fresh.filter((line) => !SUMMARY_LINE.test(line));
+  const championships_won = [...preserveSummaryLines(existing), ...eventLines];
+
+  return {
+    name,
+    gender,
+    ittf_id: existing?.ittf_id ?? (String(row.IttfId ?? "") || null),
+    ranking: parseInt(row.CurrentRank ?? row.RankingPosition) ??
+      existing?.ranking ?? null,
+    ranking_points: parseInt(
+      row.RankingPointsYTD ?? row.RankingPointsCareer,
+    ) ?? existing?.ranking_points ?? null,
+    age: existing?.age ?? parseInt(row.Age),
+    height: existing?.height ?? null,
+    hand: existing?.hand ?? null,
+    championships_won,
+    photo_url: existing?.photo_url ?? photoFromRankingRow(row),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function titlesChanged(
+  existing: Record<string, unknown> | undefined,
+  record: Record<string, unknown>,
+): boolean {
+  if (!existing) return true;
+  return !championshipsEqual(existing.championships_won, record.championships_won);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -243,6 +298,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const fullMode = isFullMode(body);
+    const titlesMode = isTitlesMode(body);
 
     const { data: existingRows, error: fetchErr } = await supabase.from("athletes")
       .select(
@@ -267,7 +323,7 @@ Deno.serve(async (req: Request) => {
     const remoteMeta = allRankings[0] ?? {};
     const allTargets = collectAllTargets(allRankings);
 
-    if (!fullMode) {
+    if (!fullMode && !titlesMode) {
       const athletesToUpsert: Record<string, unknown>[] = [];
       let changedCount = 0;
 
@@ -308,6 +364,69 @@ Deno.serve(async (req: Request) => {
           rankingWeek: remoteMeta.RankingWeek ?? null,
           rankingYear: remoteMeta.RankingYear ?? null,
           hasUpdates: changedCount > 0 || (existingRows?.length ?? 0) === 0,
+        }),
+        {
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+            "Connection": "keep-alive",
+          },
+        },
+      );
+    }
+
+    if (titlesMode) {
+      const { offset, limit } = parseBatchParams(req, body);
+      const batchEnd = Math.min(offset + limit, allTargets.length);
+      const batchTargets = allTargets.slice(offset, batchEnd);
+
+      const athletesToUpsert: Record<string, unknown>[] = [];
+      let changedCount = 0;
+      let lastAthleteName: string | null = null;
+
+      for (const target of batchTargets) {
+        const name = String(target.row.PlayerName ?? "");
+        lastAthleteName = name;
+        const key = athleteKey(name, target.gender);
+        const existing = existingByKey.get(key);
+        const record = await buildAthleteRecordTitles(
+          target.row,
+          target.gender,
+          existing,
+        );
+
+        if (titlesChanged(existing, record)) {
+          changedCount++;
+          athletesToUpsert.push(record);
+        }
+      }
+
+      if (athletesToUpsert.length > 0) {
+        const { error: upsertErr } = await supabase.from("athletes").upsert(
+          athletesToUpsert,
+          { onConflict: "name,gender" },
+        );
+        if (upsertErr) throw upsertErr;
+      }
+
+      const processed = offset + batchTargets.length;
+      const total = allTargets.length || TOTAL_ATHLETES;
+      const done = processed >= total;
+
+      return new Response(
+        JSON.stringify({
+          mode: "titles",
+          athletesSynced: athletesToUpsert.length,
+          athletesChanged: changedCount,
+          titlesChanged: changedCount,
+          processed,
+          total,
+          offset,
+          done,
+          currentAthlete: lastAthleteName,
+          rankingWeek: remoteMeta.RankingWeek ?? null,
+          rankingYear: remoteMeta.RankingYear ?? null,
+          hasUpdates: changedCount > 0,
         }),
         {
           headers: {

@@ -117,11 +117,14 @@ class _HomeScreenState extends State<HomeScreen>
     if (result.hasUpdates) {
       await _loadAthletes();
       if (!mounted) return;
+      final titlesPart = result.titlesChanged > 0
+          ? ', ${result.titlesChanged} título(s) atualizado(s)'
+          : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${result.athletesChecked} atletas verificados, '
-            '${result.athletesChanged} alterados — '
+            '${result.athletesChecked} atletas verificados'
+            '$titlesPart — '
             'semana ${result.rankingWeek ?? "?"} de ${result.rankingYear ?? "?"}.',
           ),
         ),
