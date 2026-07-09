@@ -187,7 +187,7 @@ async function buildAthleteRecordFull(
   const name = String(row.PlayerName ?? profile.PlayerName ?? "");
   const photo = profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL ??
     photoFromRankingRow(row);
-  const { buildChampionships } = await import("./title_enrichment.ts");
+  const { buildChampionships } = await importEnrichment();
   return {
     name,
     gender,
@@ -241,13 +241,23 @@ function championshipsEqual(a: unknown, b: unknown): boolean {
   return la.length === lb.length && la.every((v, i) => v === lb[i]);
 }
 
+async function importEnrichment() {
+  try {
+    return await import("./title_enrichment.ts");
+  } catch {
+    return await import(
+      "https://raw.githubusercontent.com/VChirity/tm-val/main/supabase/functions/sync-wtt/title_enrichment.ts",
+    );
+  }
+}
+
 async function buildAthleteRecordTitles(
   row: Record<string, unknown>,
   gender: string,
   existing?: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const name = String(row.PlayerName ?? existing?.name ?? "");
-  const { buildChampionships } = await import("./title_enrichment.ts");
+  const { buildChampionships } = await importEnrichment();
   const fresh = await buildChampionships({}, name);
   const eventLines = fresh.filter((line) => !SUMMARY_LINE.test(line));
   const championships_won = [...preserveSummaryLines(existing), ...eventLines];
