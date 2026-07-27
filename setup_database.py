@@ -15,12 +15,13 @@ ENV_PATH = ROOT_DIR / ".env"
 
 SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 CREATE TABLE IF NOT EXISTS athletes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     gender TEXT NOT NULL CHECK (gender IN ('male', 'female')),
-    ranking INTEGER NOT NULL,
+    ranking INTEGER,
     ranking_points INTEGER,
     age INTEGER,
     height DOUBLE PRECISION,
@@ -28,12 +29,35 @@ CREATE TABLE IF NOT EXISTS athletes (
     championships_won TEXT[] DEFAULT '{}',
     ittf_id TEXT,
     photo_url TEXT,
+    country_code TEXT,
+    listed_in_home BOOLEAN NOT NULL DEFAULT true,
+    profile_hydrated BOOLEAN NOT NULL DEFAULT true,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT athletes_name_gender_key UNIQUE (name, gender)
 );
 
 CREATE INDEX IF NOT EXISTS athletes_gender_ranking_idx
     ON athletes (gender, ranking ASC);
+
+CREATE INDEX IF NOT EXISTS athletes_listed_in_home_idx
+    ON athletes (listed_in_home);
+
+CREATE TABLE IF NOT EXISTS player_registry (
+    ittf_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    gender TEXT NOT NULL CHECK (gender IN ('male', 'female')),
+    country_code TEXT,
+    ranking INTEGER,
+    ranking_points INTEGER,
+    photo_url TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS player_registry_name_idx
+    ON player_registry USING gin (name gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS player_registry_ranking_idx
+    ON player_registry (gender, ranking ASC);
 
 CREATE TABLE IF NOT EXISTS athlete_notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -117,6 +141,15 @@ CREATE POLICY "broadcast_notes_auth_all"
     TO authenticated
     USING (true)
     WITH CHECK (true);
+
+ALTER TABLE player_registry ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "player_registry_auth_all" ON player_registry;
+CREATE POLICY "player_registry_auth_all"
+    ON player_registry FOR ALL
+    TO authenticated
+    USING (true)
+    WITH CHECK (true);
 """
 
 
@@ -160,7 +193,22 @@ def main() -> None:
                     "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS ittf_id TEXT;"
                 )
                 cursor.execute(
+                    "ALTER TABLE athletes ALTER COLUMN ranking DROP NOT NULL;"
+                )
+                cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS listed_in_home BOOLEAN NOT NULL DEFAULT true;"
+                )
+                cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS country_code TEXT;"
+                )
+                cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS profile_hydrated BOOLEAN NOT NULL DEFAULT true;"
+                )
+                cursor.execute(
                     "CREATE INDEX IF NOT EXISTS athletes_ittf_id_idx ON athletes (ittf_id);"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS athletes_listed_in_home_idx ON athletes (listed_in_home);"
                 )
                 cursor.execute(
                     "DROP INDEX IF EXISTS athlete_notes_athlete_id_uidx;"
@@ -176,7 +224,7 @@ def main() -> None:
                     SELECT table_name
                     FROM information_schema.tables
                     WHERE table_schema = 'public'
-                      AND table_name IN ('athletes', 'athlete_notes', 'broadcast_notes')
+                      AND table_name IN ('athletes', 'athlete_notes', 'broadcast_notes', 'player_registry')
                     ORDER BY table_name;
                     """
                 )

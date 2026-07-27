@@ -6,6 +6,7 @@ import '../services/athlete_repository.dart';
 import '../services/app_auth_service.dart';
 import '../services/broadcast_note_repository.dart';
 import '../services/photo_cache_service.dart';
+import '../widgets/add_athlete_dialog.dart';
 import '../widgets/athlete_list_tile.dart';
 import '../widgets/sync_progress_dialog.dart';
 import 'athlete_detail_screen.dart';
@@ -87,9 +88,15 @@ class _HomeScreenState extends State<HomeScreen>
       });
 
       if (!mounted) return;
+      // Só pré-carrega as primeiras fotos visíveis de cada aba (não as ~100+
+      // de cada gênero) para não travar o carregamento inicial da home.
+      const visibleCount = 20;
       await PhotoCacheService.warmUpAthletes(
         context,
-        [..._maleAthletes, ..._femaleAthletes],
+        [
+          ..._maleAthletes.take(visibleCount),
+          ..._femaleAthletes.take(visibleCount),
+        ],
       );
     } catch (error) {
       if (!mounted) return;
@@ -136,6 +143,17 @@ class _HomeScreenState extends State<HomeScreen>
             '${result.athletesChecked} atletas verificados — nada mudou.',
           ),
         ),
+      );
+    }
+  }
+
+  Future<void> _addAthlete() async {
+    final added = await showAddAthleteDialog(context);
+    if (added == true) {
+      await _loadAthletes();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Atleta adicionado à home.')),
       );
     }
   }
@@ -400,6 +418,8 @@ class _HomeScreenState extends State<HomeScreen>
           onSelected: (value) {
             if (value == 'sync') {
               _syncFromWtt();
+            } else if (value == 'add') {
+              _addAthlete();
             } else if (value == 'logout') {
               _auth.signOut();
             }
@@ -421,6 +441,14 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
             const PopupMenuItem(
+              value: 'add',
+              child: ListTile(
+                leading: Icon(Icons.person_add_alt_1_outlined),
+                title: Text('Adicionar atleta'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            const PopupMenuItem(
               value: 'logout',
               child: ListTile(
                 leading: Icon(Icons.logout),
@@ -434,6 +462,12 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     return [
+      FilledButton.tonalIcon(
+        onPressed: _addAthlete,
+        icon: const Icon(Icons.person_add_alt_1_outlined),
+        label: const Text('Adicionar atleta'),
+      ),
+      const SizedBox(width: 8),
       FilledButton.tonalIcon(
         onPressed: _isSyncing ? null : _syncFromWtt,
         icon: _isSyncing

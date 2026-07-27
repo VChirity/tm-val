@@ -10,15 +10,38 @@ class AthleteRepository {
 
   final SupabaseClient _client;
 
+  /// Colunas usadas na home: evita `championships_won` (pode ser grande em
+  /// atletas com muitos títulos) para acelerar o carregamento inicial.
+  static const _homeColumns =
+      'id,name,gender,ranking,ranking_points,age,height,hand,ittf_id,'
+      'photo_url,country_code,listed_in_home,profile_hydrated,updated_at';
+
+  static const _homeColumnsLegacy =
+      'id,name,gender,ranking,ranking_points,age,height,hand,ittf_id,'
+      'photo_url,updated_at';
+
   Future<List<Athlete>> fetchAthletes({required String gender}) async {
-    final rows = await _client
-        .from('athletes')
-        .select('*')
-        .eq('gender', gender)
-        .order('ranking', ascending: true);
+    List rows;
+    try {
+      rows = await _client
+          .from('athletes')
+          .select(_homeColumns)
+          .eq('gender', gender)
+          .or('listed_in_home.eq.true,ranking.lte.100')
+          .order('ranking', ascending: true, nullsFirst: false)
+          .order('name', ascending: true) as List;
+    } catch (_) {
+      // Fallback se colunas novas ainda não existirem no schema remoto.
+      rows = await _client
+          .from('athletes')
+          .select(_homeColumnsLegacy)
+          .eq('gender', gender)
+          .order('ranking', ascending: true)
+          .order('name', ascending: true) as List;
+    }
     final noteAthleteIds = await _fetchAthleteIdsWithNotes();
 
-    return (rows as List)
+    return rows
         .map(
           (row) => Athlete.fromJson(
             Map<String, dynamic>.from(row as Map),
@@ -113,17 +136,16 @@ class AthleteRepository {
   }
 
   Future<Set<String>> _fetchAthleteIdsWithNotes() async {
+    // Só busca a coluna athlete_id (não content) para reduzir o payload;
+    // o filtro de conteúdo vazio já é aplicado no servidor.
     final rows = await _client
         .from('athlete_notes')
-        .select('athlete_id, content');
+        .select('athlete_id')
+        .not('content', 'eq', '');
 
     return (rows as List)
-        .where((row) {
-          final content = (row as Map)['content']?.toString().trim() ?? '';
-          return content.isNotEmpty;
-        })
         .map((row) => (row as Map)['athlete_id'] as String)
         .toSet();
   }
 }
-
+

@@ -157,6 +157,8 @@ function buildAthleteRecordFast(
     hand: existing?.hand ?? null,
     championships_won: existing?.championships_won ?? [],
     photo_url: rankingPhoto ?? existingPhoto,
+    listed_in_home: true,
+    profile_hydrated: existing?.profile_hydrated ?? true,
     updated_at: new Date().toISOString(),
   };
 }
@@ -201,6 +203,8 @@ async function buildAthleteRecordFull(
     hand: profile.Handedness ?? card.Hand ?? null,
     championships_won: await buildChampionships(card, name),
     photo_url: normalizePhotoUrl(photo),
+    listed_in_home: true,
+    profile_hydrated: true,
     updated_at: new Date().toISOString(),
   };
 }
@@ -251,16 +255,129 @@ async function importEnrichment() {
   }
 }
 
+function titlePriority(title: string): number {
+  const lower = title.toLowerCase();
+  if (lower.includes("campeão") || lower.includes("campeã")) return 4;
+  if (lower.includes("2° lugar") || lower.includes("prata")) return 3;
+  if (lower.includes("3° lugar") || lower.includes("bronze")) return 2;
+  if (lower.includes("4° lugar") || lower.includes("5-8")) return 1;
+  return 0;
+}
+
+function titleIdentityKey(title: string): string {
+  const year = (title.match(/\b((?:19|20)\d{2})\b/) ?? [])[1] ?? "";
+  const lower = title.toLowerCase();
+  let category = "simples";
+  if (lower.includes("duplas mistas") || lower.includes("— mista")) {
+    category = "mista";
+  } else if (lower.includes("duplas")) category = "duplas";
+  else if (lower.includes("equipe")) category = "equipe";
+  const rawEvent = title.includes(":")
+    ? title.split(":", 1)[0].trim().toLowerCase()
+    : lower;
+  let event = rawEvent;
+  if (event.startsWith("nacional")) event = "nacional";
+  else if (event.includes("campeonato mundial")) event = "campeonato mundial";
+  else if (event.includes("pan-americano")) event = "pan-americano";
+  else if (event.includes("copa do mundo")) event = "copa do mundo";
+  else if (event.includes("grand smash")) event = "wtt grand smash";
+  else if (event.includes("wtt finals") || event.includes("cup finals")) {
+    event = "wtt finals";
+  } else if (event.includes("star contender")) event = "wtt star contender";
+  else if (event.includes("wtt contender")) event = "wtt contender";
+  else if (event.includes("wtt champions")) event = "wtt champions";
+  const paren = title.match(/\(([^)]+)\)/);
+  let location = "";
+  if (paren) {
+    location = paren[1]
+      .toLowerCase()
+      .replace(/\b(?:19|20)\d{2}\b/g, "")
+      .split("—")[0]
+      .trim()
+      .replace(/\s+/g, " ");
+  }
+  return `${event}|${year}|${location}|${category}`;
+}
+
+/** Merge local (não depende de exports do title_enrichment). */
+function mergeTitleLists(...sources: string[][]): string[] {
+  const best = new Map<string, [number, string]>();
+  const order: string[] = [];
+  for (const source of sources) {
+    for (const raw of source) {
+      const text = String(raw).trim();
+      if (!text) continue;
+      const key = titleIdentityKey(text);
+      const priority = titlePriority(text);
+      const existing = best.get(key);
+      if (!existing) {
+        order.push(key);
+        best.set(key, [priority, text]);
+      } else if (priority > existing[0]) {
+        best.set(key, [priority, text]);
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const key of order) {
+    const entry = best.get(key);
+    if (!entry) continue;
+    if (seen.has(entry[1])) continue;
+    seen.add(entry[1]);
+    merged.push(entry[1]);
+  }
+  return merged;
+}
+
+function sortTitleLists(titles: string[]): string[] {
+  const summary = titles.filter((t) => SUMMARY_LINE.test(t));
+  const rest = titles.filter((t) => !SUMMARY_LINE.test(t));
+  rest.sort((a, b) => {
+    const ya = Number.parseInt(a.match(/\b((?:19|20)\d{2})\b/)?.[1] ?? "0", 10);
+    const yb = Number.parseInt(b.match(/\b((?:19|20)\d{2})\b/)?.[1] ?? "0", 10);
+    return yb - ya || a.localeCompare(b);
+  });
+  return [...summary, ...rest];
+}
+
+function eventTitleLines(titles: unknown): string[] {
+  const arr = (titles as string[] | null)?.map(String) ?? [];
+  return arr.filter((line) => !SUMMARY_LINE.test(line));
+}
+
+function countEventTitles(titles: unknown): number {
+  return eventTitleLines(titles).length;
+}
+
 async function buildAthleteRecordTitles(
   row: Record<string, unknown>,
   gender: string,
   existing?: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const name = String(row.PlayerName ?? existing?.name ?? "");
+  const existingTitles =
+    (existing?.championships_won as string[] | null)?.map(String) ?? [];
   const { buildChampionships } = await importEnrichment();
   const fresh = await buildChampionships({}, name);
-  const eventLines = fresh.filter((line) => !SUMMARY_LINE.test(line));
-  const championships_won = [...preserveSummaryLines(existing), ...eventLines];
+  const freshEvents = eventTitleLines(fresh);
+  const existingEvents = eventTitleLines(existingTitles);
+
+  // Nunca substituir por conjunto mais pobre / vazio.
+  let championships_won: string[];
+  if (freshEvents.length === 0) {
+    championships_won = existingTitles;
+  } else {
+    const freshSummary = fresh.filter((line) => SUMMARY_LINE.test(line));
+    const summary = freshSummary.length > 0
+      ? freshSummary
+      : preserveSummaryLines(existing);
+    const mergedEvents = mergeTitleLists(existingEvents, freshEvents);
+    championships_won = sortTitleLists([...summary, ...mergedEvents]);
+    if (countEventTitles(championships_won) < existingEvents.length) {
+      championships_won = existingTitles;
+    }
+  }
 
   return {
     name,
@@ -276,6 +393,8 @@ async function buildAthleteRecordTitles(
     hand: existing?.hand ?? null,
     championships_won,
     photo_url: existing?.photo_url ?? photoFromRankingRow(row),
+    listed_in_home: true,
+    profile_hydrated: true,
     updated_at: new Date().toISOString(),
   };
 }
@@ -312,7 +431,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: existingRows, error: fetchErr } = await supabase.from("athletes")
       .select(
-        "name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url",
+        "name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,profile_hydrated",
       );
     if (fetchErr) throw fetchErr;
 

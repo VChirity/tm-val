@@ -83,76 +83,29 @@ class WttSyncService {
       throw Exception(rankingData['error'].toString());
     }
 
+    // Temporário: Atualizar só sincroniza ranking (fast).
+    // Enrichment de títulos ficou desligado até o merge estar comprovado seguro.
     final rankingChanged = _parseInt(rankingData['athletesChanged']) ?? 0;
-    var rankingWeek = rankingData['rankingWeek']?.toString();
-    var rankingYear = rankingData['rankingYear']?.toString();
-    var titlesChanged = 0;
-    var processed = 0;
-    const total = _totalAthletes;
+    final rankingWeek = rankingData['rankingWeek']?.toString();
+    final rankingYear = rankingData['rankingYear']?.toString();
+    final total = _parseInt(rankingData['total']) ??
+        _parseInt(rankingData['processed']) ??
+        _totalAthletes;
 
-    onProgress?.call('Rankings ok. Atualizando títulos 0/$total...', 0.12);
-
-    for (var offset = 0; offset < total; offset += _webBatchSize) {
-      final response = await _client.functions.invoke(
-        'sync-wtt',
-        body: {
-          'mode': 'titles',
-          'offset': offset,
-          'limit': _webBatchSize,
-        },
-      );
-
-      if (response.status != 200) {
-        final details = response.data?.toString() ?? 'sem detalhes';
-        throw Exception('Falha ao atualizar títulos ($details)');
-      }
-
-      final data = Map<String, dynamic>.from(response.data as Map);
-      if (data['error'] != null) {
-        throw Exception(data['error'].toString());
-      }
-
-      processed = _parseInt(data['processed']) ?? processed;
-      titlesChanged += _parseInt(data['titlesChanged']) ??
-          _parseInt(data['athletesChanged']) ??
-          0;
-      rankingWeek ??= data['rankingWeek']?.toString();
-      rankingYear ??= data['rankingYear']?.toString();
-
-      final progress = 0.12 + (processed / total) * 0.88;
-      final percent = (progress * 100).round();
-      final athleteName = data['currentAthlete']?.toString();
-
-      onProgress?.call(
-        'Atualizando títulos $processed/$total ($percent%)...',
-        progress.clamp(0.0, 0.99),
-        subtitle: athleteName != null && athleteName.isNotEmpty
-            ? athleteName
-            : null,
-      );
-
-      if (data['done'] == true || processed >= total) {
-        break;
-      }
-    }
-
-    final hasUpdates = rankingChanged > 0 || titlesChanged > 0;
-    final summary = titlesChanged > 0
-        ? '$total atletas — $rankingChanged ranking(s), $titlesChanged título(s)'
-        : rankingChanged > 0
-            ? '$total atletas — $rankingChanged ranking(s) alterados'
-            : '$total atletas verificados — nada mudou';
+    final summary = rankingChanged > 0
+        ? '$total atletas — $rankingChanged ranking(s) alterados'
+        : '$total atletas verificados — nada mudou';
 
     onProgress?.call(summary, 1);
 
     return WttSyncResult(
-      athletesSynced: rankingChanged + titlesChanged,
+      athletesSynced: rankingChanged,
       rankingWeek: rankingWeek,
       rankingYear: rankingYear,
-      hasUpdates: hasUpdates,
-      athletesChanged: rankingChanged + titlesChanged,
+      hasUpdates: rankingChanged > 0 || rankingData['hasUpdates'] == true,
+      athletesChanged: rankingChanged,
       athletesChecked: total,
-      titlesChanged: titlesChanged,
+      titlesChanged: 0,
     );
   }
 
@@ -244,7 +197,7 @@ class WttSyncService {
 
   Future<List<Map<String, dynamic>>> _fetchExistingAthletes() async {
     final rows = await _client.from('athletes').select(
-      'name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url',
+      'name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,profile_hydrated',
     );
     return (rows as List)
         .map((row) => Map<String, dynamic>.from(row as Map))
@@ -319,6 +272,8 @@ class WttSyncService {
       'hand': existing?['hand'],
       'championships_won': existing?['championships_won'] ?? [],
       'photo_url': rankingPhoto ?? existingPhoto,
+      'listed_in_home': true,
+      'profile_hydrated': existing?['profile_hydrated'] ?? true,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
   }

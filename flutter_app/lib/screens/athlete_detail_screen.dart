@@ -627,7 +627,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Ranking #${athlete.ranking} • ${PtBr.formatRankingPoints(athlete.rankingPoints)}',
+          'Ranking ${PtBr.formatRanking(athlete.ranking)} • ${PtBr.formatRankingPoints(athlete.rankingPoints)}',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleMedium,
         ),

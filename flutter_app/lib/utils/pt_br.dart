@@ -23,6 +23,13 @@ class PtBr {
     return hand;
   }
 
+  static String formatRanking(int? ranking) {
+    if (ranking == null) {
+      return 'Sem ranking definido';
+    }
+    return '#$ranking';
+  }
+
   static String formatRankingPoints(int? points) {
     if (points == null) {
       return 'Pontuação não informada';
