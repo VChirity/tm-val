@@ -665,6 +665,13 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
             ),
           ),
         ),
+        if (athlete.shortBio != null && athlete.shortBio!.trim().isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Text(
+            athlete.shortBio!.trim(),
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ],
         if (athlete.championshipsWon.isNotEmpty) ...[
           const SizedBox(height: 16),
           _buildTitlesSection(athlete),

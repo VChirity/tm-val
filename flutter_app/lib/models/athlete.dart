@@ -11,6 +11,7 @@ class Athlete {
     this.hand,
     this.championshipsWon = const [],
     this.photoUrl,
+    this.shortBio,
     this.countryCode,
     this.listedInHome = true,
     this.profileHydrated = true,
@@ -29,6 +30,7 @@ class Athlete {
   final String? hand;
   final List<String> championshipsWon;
   final String? photoUrl;
+  final String? shortBio;
   final String? countryCode;
   final bool listedInHome;
   final bool profileHydrated;
@@ -51,6 +53,7 @@ class Athlete {
           ? championships.map((item) => item.toString()).toList()
           : const [],
       photoUrl: json['photo_url'] as String?,
+      shortBio: json['short_bio'] as String?,
       countryCode: json['country_code'] as String?,
       listedInHome: json['listed_in_home'] as bool? ?? true,
       profileHydrated: json['profile_hydrated'] as bool? ?? true,
@@ -74,6 +77,7 @@ class Athlete {
       'hand': hand,
       'championships_won': championshipsWon,
       'photo_url': photoUrl,
+      'short_bio': shortBio,
       'country_code': countryCode,
       'listed_in_home': listedInHome,
       'profile_hydrated': profileHydrated,
@@ -94,6 +98,7 @@ class Athlete {
       hand: hand,
       championshipsWon: championshipsWon,
       photoUrl: photoUrl,
+      shortBio: shortBio,
       countryCode: countryCode,
       listedInHome: listedInHome,
       profileHydrated: profileHydrated,

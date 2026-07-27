@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/wtt_player_lookup_service.dart';
 import '../utils/pt_br.dart';
+import 'athlete_photo.dart';
 
 /// Mostra o diálogo "Adicionar atleta": busca por nome no registro (~top
 /// 1000 nomes) + WTT ao vivo, e hidrata o atleta escolhido para a home.
@@ -106,13 +107,13 @@ class _AddAthleteDialogState extends State<_AddAthleteDialog> {
 
   Widget _buildCandidateTile(PlayerCandidate candidate) {
     return ListTile(
-      leading: CircleAvatar(
-        backgroundImage: candidate.photoUrl != null
-            ? NetworkImage(candidate.photoUrl!)
-            : null,
-        child: candidate.photoUrl == null
-            ? Text(candidate.name.isNotEmpty ? candidate.name[0] : '?')
-            : null,
+      leading: AthletePhoto(
+        photoUrl: candidate.photoUrl,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        iconSize: 28,
+        memCacheSize: 112,
       ),
       title: Text(candidate.name),
       subtitle: Text(
