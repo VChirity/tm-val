@@ -1,0 +1,63 @@
+name: Keep Supabase Alive
+
+# Plano Free do Supabase pausa o projeto após ~7 dias sem atividade.
+# Este cron faz um ping leve todo dia para o projeto não sair do ar.
+on:
+  schedule:
+    # 12:00 UTC = 09:00 BRT — 1x por dia
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-supabase-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    name: Ping TM Val Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Health check REST
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "Faltam secrets SUPABASE_URL / SUPABASE_ANON_KEY"
+            exit 1
+          fi
+
+          BASE="${SUPABASE_URL%/}"
+          echo "Ping em $BASE ..."
+
+          # 1) Health do Auth (não precisa de login)
+          code_auth=$(curl -sS -o /tmp/sb_auth.txt -w "%{http_code}" \
+            --max-time 30 \
+            "$BASE/auth/v1/health" \
+            -H "apikey: $SUPABASE_ANON_KEY" || true)
+          echo "auth/health HTTP $code_auth"
+          cat /tmp/sb_auth.txt || true
+          echo
+
+          # 2) Query mínima na tabela (mantém Postgres acordado)
+          code_athletes=$(curl -sS -o /tmp/sb_athletes.txt -w "%{http_code}" \
+            --max-time 45 \
+            "$BASE/rest/v1/athletes?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" || true)
+          echo "athletes HTTP $code_athletes"
+
+          # 000 = DNS/timeout (projeto pausado). 401/403 = projeto no ar.
+          if [ "$code_auth" = "000" ] && [ "$code_athletes" = "000" ]; then
+            echo "Falha de conexão — projeto pode estar pausado."
+            exit 1
+          fi
+
+          if [ "$code_auth" -ge 500 ] 2>/dev/null; then
+            echo "Auth health com erro de servidor."
+            exit 1
+          fi
+
+          echo "OK — Supabase respondeu e permanece ativo."
