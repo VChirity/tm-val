@@ -23,7 +23,40 @@ from scraper import (  # noqa: E402
     collect_gender_rankings,
     fetch_rankings,
 )
-from title_enrichment import build_championships  # noqa: E402
+from title_enrichment import (  # noqa: E402
+    build_championships,
+    merge_titles,
+    sort_titles_by_year,
+)
+
+_SUMMARY_RE = __import__("re").compile(
+    r"^(Títulos em simples|Títulos em duplas|Títulos na carreira|Último resultado:)",
+    __import__("re").I,
+)
+
+
+def _is_summary(line: str) -> bool:
+    return bool(_SUMMARY_RE.match(line.strip()))
+
+
+def _event_lines(titles: list[str]) -> list[str]:
+    return [t for t in titles if not _is_summary(t)]
+
+
+def _merge_with_existing(existing: list[str], fresh: list[str]) -> list[str]:
+    fresh_events = _event_lines(fresh)
+    existing_events = _event_lines(existing)
+    if not fresh_events:
+        return existing
+    fresh_summary = [t for t in fresh if _is_summary(t)]
+    existing_summary = [t for t in existing if _is_summary(t)]
+    summary = fresh_summary or existing_summary
+    merged = sort_titles_by_year(
+        list(summary) + merge_titles(existing_events, fresh_events)
+    )
+    if len(_event_lines(merged)) < len(existing_events):
+        return existing
+    return merged
 
 
 def fetch_card(ittf_id: str) -> dict:
@@ -55,25 +88,53 @@ def main() -> None:
     client = create_client(url, key)
     all_rankings = fetch_rankings()
     updated = 0
+    restored_events = 0
+
+    # Prefetch existing titles by ittf_id
+    existing_rows = (
+        client.table("athletes")
+        .select("ittf_id,championships_won")
+        .execute()
+        .data
+        or []
+    )
+    existing_by_ittf = {
+        str(r.get("ittf_id") or ""): list(r.get("championships_won") or [])
+        for r in existing_rows
+        if r.get("ittf_id")
+    }
 
     for sub_event in ("MS", "WS"):
         rows = collect_gender_rankings(all_rankings, sub_event)
         for index, row in enumerate(rows, start=1):
             name = row.get("PlayerName", "?")
             ittf_id = str(row.get("IttfId", "")).strip()
-            gender = "male" if sub_event == "MS" else "female"
             print(f"[{index}/100] {name}")
 
             card = fetch_card(ittf_id) if ittf_id else {}
-            titles = build_championships(card, name)
+            fresh = build_championships(card, name)
+            existing = existing_by_ittf.get(ittf_id, [])
+            titles = _merge_with_existing(existing, fresh)
 
-            client.table("athletes").update({"championships_won": titles}).eq(
-                "ittf_id", ittf_id
-            ).execute()
-            updated += 1
+            before = len(_event_lines(existing))
+            after = len(_event_lines(titles))
+            if titles != existing:
+                client.table("athletes").update({"championships_won": titles}).eq(
+                    "ittf_id", ittf_id
+                ).execute()
+                updated += 1
+                if after > before:
+                    restored_events += after - before
+                existing_by_ittf[ittf_id] = titles
+                print(f"  -> {before} -> {after} event titles")
+            else:
+                print(f"  -> unchanged ({after} event titles)")
             time.sleep(0.15)
 
-    print(f"Concluído: {updated} atletas com títulos enriquecidos.")
+    print(
+        f"Concluido: {updated} atletas atualizados; "
+        f"+{restored_events} event titles liquidos."
+    )
 
 
 if __name__ == "__main__":
