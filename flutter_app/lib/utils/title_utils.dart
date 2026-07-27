@@ -20,10 +20,19 @@ class TitleUtils {
     r'\bwtt\b|grand smash|star contender|contender|cup finals|wtt finals|wtt champions|smash',
     caseSensitive: false,
   );
+  /// Títulos domésticos brasileiros (CBTM / Brasileirão / ranking nacional).
   static final _nacionalPattern = RegExp(
+    r'^nacional\s*:|'
+    r'brasileir[aã]o|campeonato brasileiro|copa brasil\b|tmb platinum|'
+    r'\bcbtm\b|absoluto a|ranking nacional|torneio nacional',
+    caseSensitive: false,
+  );
+  /// Continentais das Américas (Pan, sul-americano, latino-americano…).
+  static final _panAmPattern = RegExp(
     r'pan.?american|panameric|jogos pan|pan-americano|patc|sul.?americ|'
+    r'latino.?american|latin american|copa das am|'
     r'\b(lima|santiago|havana|guaynabo|asunción|cartagena|san juan|'
-    r'toronto|santo domingo|rock hill|san salvador|buenos aires)\b',
+    r'toronto|santo domingo|rock hill|san salvador)\b',
     caseSensitive: false,
   );
   static final _eventAsLocationPattern = RegExp(
@@ -92,6 +101,10 @@ class TitleUtils {
     if (text.isEmpty) return '';
 
     text = text.replaceAllMapped(_dupYearPattern, (m) => m.group(1)!);
+    // Títulos nacionais BR: preservar nome do evento (Brasileirão / TMB…).
+    if (RegExp(r'^nacional\s*:', caseSensitive: false).hasMatch(text)) {
+      return text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    }
     if (!text.contains(':')) return text;
 
     final parts = text.split(':');
@@ -290,6 +303,9 @@ class TitleUtils {
     if (_nacionalPattern.hasMatch(text)) {
       return TitleCategory.nacional;
     }
+    if (_panAmPattern.hasMatch(text)) {
+      return TitleCategory.panAm;
+    }
     return TitleCategory.outros;
   }
 
@@ -477,6 +493,7 @@ enum TitleCategory {
   all,
   wtt,
   nacional,
+  panAm,
   outros,
 }
 

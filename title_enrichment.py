@@ -115,7 +115,9 @@ PRESTIGIOUS_WTT = re.compile(
 NATIONAL_CHAMP = re.compile(
     r"swedish championship|german championship|french championship|"
     r"english championship|japanese championship|chinese championship|"
-    r"national championship|national championships|campeonato nacional",
+    r"national championship|national championships|campeonato nacional|"
+    r"campeonato brasileiro|brasileir[aã]o|copa brasil|tmb platinum|"
+    r"ranking nacional",
     re.I,
 )
 
@@ -329,19 +331,46 @@ def _discipline_to_pt(value: str) -> str:
     return translate_highlight(value) if value else "Simples"
 
 
+_LOCATION_NOISE = re.compile(
+    r"\b("
+    r"wtt|ittf|star\s+contender|contender|champions?|grand\s+smash|europe\s+smash|"
+    r"finals?|feeder|cup\s+finals?|table\s+tennis|championships?|games?|"
+    r"men'?s|women'?s|singles|doubles|mixed|team|at\s+the|–|-|"
+    r"pan\s+american|world\s+cup|americas?\s+cup|latin\s+american"
+    r")\b",
+    re.I,
+)
+
+
+def _strip_years(text: str) -> str:
+    return re.sub(r"\b(19|20)\d{2}\b", " ", text)
+
+
+def _clean_location_text(loc: str, year: str | None = None) -> str:
+    loc = clean_wiki_text(loc)
+    if not loc:
+        return ""
+    if year:
+        loc = re.sub(rf"\b{re.escape(year)}\b", " ", loc)
+    loc = _strip_years(loc)
+    loc = _LOCATION_NOISE.sub(" ", loc)
+    loc = re.sub(r"\s+", " ", loc).strip(" ,;/|-–—")
+    # Remove ano duplicado residual tipo "2026 2026"
+    loc = re.sub(r"\b((?:19|20)\d{2})(?:\s+\1)+\b", r"\1", loc)
+    return localize_place(loc) if loc else ""
+
+
 def _extract_location(part1: str, part2: str, year: str | None) -> str:
     for part in (part1, part2):
-        loc = clean_wiki_text(part)
-        if not loc:
-            continue
-        if year:
-            loc = re.sub(rf"^{re.escape(year)}\s*", "", loc).strip()
-        loc = re.sub(r"^\d{4}\s*", "", loc).strip()
+        loc = _clean_location_text(part, year)
         lower = loc.lower()
-        if lower in {"singles", "doubles", "mixed doubles", "team", "mixed team", "simples", "duplas", "equipe"}:
+        if lower in {"singles", "doubles", "mixed doubles", "team", "mixed team", "simples", "duplas", "equipe", ""}:
+            continue
+        # Localização que ainda parece nome de evento → ignora
+        if re.search(r"championship|cup|contender|smash|finals|olympi", lower):
             continue
         if loc:
-            return localize_place(loc)
+            return loc
     return "?"
 
 
@@ -453,7 +482,8 @@ def _format_medal_line(
     ):
         return None
 
-    location_year = f"{location} {year}".strip()
+    location_year = f"{location} {year}".strip() if location and location != "?" else year
+    location_year = re.sub(r"\b((?:19|20)\d{2})(?:\s+\1)+\b", r"\1", location_year)
     return f"{comp_name}: {result_pt} ({location_year} — {category})"
 
 
@@ -546,9 +576,7 @@ def _format_wtt_event_name(event: str) -> str:
     event = clean_wiki_text(event)
     event = translate_highlight(event)
     lower = event.lower()
-    if "grand smash" in lower:
-        return "WTT Grand Smash"
-    if "europe smash" in lower:
+    if "grand smash" in lower or "europe smash" in lower:
         return "WTT Grand Smash"
     if "star contender" in lower:
         return "WTT Star Contender"
@@ -558,12 +586,15 @@ def _format_wtt_event_name(event: str) -> str:
         return "WTT Finals"
     if "wtt champions" in lower or re.search(r"\bwtt\b.*\bchampions\b", lower):
         return "WTT Champions"
+    if "feeder" in lower:
+        return "WTT Feeder"
     if "world cup" in lower and "table tennis" in lower:
         return "Copa do Mundo"
+    # Nunca devolver o nome completo (cidade/ano) — só o tipo canônico.
     if lower.startswith("wtt "):
-        return event
+        return "WTT Contender"
     if WTT_EVENT.search(event):
-        return f"WTT {event}" if not event.upper().startswith("WTT") else event
+        return "WTT Contender"
     return event
 
 
@@ -1053,60 +1084,198 @@ def _normalize_identity_event(event: str) -> str:
         return "nacional"
     if "campeonato mundial" in lower or "world table tennis" in lower:
         return "campeonato mundial"
+    if "jogos pan" in lower or "pan american games" in lower:
+        return "jogos pan-americanos"
     if "pan-americano" in lower or "pan american" in lower:
         return "pan-americano"
+    if "copa das am" in lower or "americas cup" in lower or "américa cup" in lower:
+        return "copa das americas"
+    if "latin american" in lower or "latino.?american" in lower:
+        return "latino-americano"
     if "copa do mundo" in lower or "world cup" in lower:
         return "copa do mundo"
+    if "olimp" in lower:
+        return "olimpiadas"
     if "wtt grand smash" in lower or "grand smash" in lower or "europe smash" in lower:
         return "wtt grand smash"
     if "wtt finals" in lower or "cup finals" in lower:
         return "wtt finals"
-    if "wtt star contender" in lower:
+    if "wtt star contender" in lower or "star contender" in lower:
         return "wtt star contender"
-    if "wtt contender" in lower:
+    if "wtt contender" in lower or re.search(r"\bcontender\b", lower):
         return "wtt contender"
     if "wtt champions" in lower:
         return "wtt champions"
+    # "2017 Cartagena de Indias" → tenta mapear para pan-americano quando faz sentido
+    if re.match(r"^(19|20)\d{2}\b", lower):
+        return "evento-ano"
     return lower
 
 
+def _normalize_identity_location(location: str) -> str:
+    loc = _clean_location_text(location).lower()
+    loc = re.sub(r"[^a-z0-9áàâãéêíóôõúç\s]", " ", loc)
+    loc = re.sub(r"\s+", " ", loc).strip()
+    # Locações que são só o nome do evento → vazias (mesma chave)
+    # Exceto eventos nacionais BR (brasileirão / tmb / ranking), que são o "local".
+    if re.search(r"brasileir|tmb|ranking nacional|absoluto|copa brasil|cbtm", loc):
+        loc = re.sub(r"\s*\(\d+\s*$", "", loc).strip()
+        return loc
+    if not loc or re.search(
+        r"championship|cup|contender|smash|finals|olympi|americas|latin|"
+        r"copa do mundo|copa das|pan.?americano|mundial",
+        loc,
+    ):
+        return ""
+    # Remove resíduos tipo "ljubljana (2"
+    loc = re.sub(r"\s*\(\d+\s*$", "", loc).strip()
+    aliases = {
+        "sao jose dos campos": "sao jose dos campos",
+        "são josé dos campos": "sao jose dos campos",
+        "macao": "macau",
+        "singapore": "singapura",
+        "rio de janeiro": "rio",
+        "buenos aires": "buenos aires",
+    }
+    return aliases.get(loc, loc)
+
+
+def canonicalize_title(title: str) -> str:
+    """Normaliza texto de título: ano duplicado, prefixos WTT no local, etc."""
+    text = translate_highlight(clean_wiki_text(title.strip()))
+    if not text:
+        return ""
+
+    # Corrige "2026 2026"
+    text = re.sub(r"\b((?:19|20)\d{2})(?:\s+\1)+\b", r"\1", text)
+    # Corrige "Ljubljana (2)" residual
+    text = re.sub(r"\(([^)]*?)\s*\(\d+\s*", r"(\1 ", text)
+
+    # Títulos nacionais BR: não esvaziar local (Brasileirão / TMB Platinum…)
+    if re.match(r"^Nacional\s*:", text, re.I):
+        return re.sub(r"\s+", " ", text).strip()
+
+    if ":" not in text:
+        return text
+
+    event_raw, rest = text.split(":", 1)
+    event = _normalize_event_name(event_raw.strip())
+    if re.match(r"^(19|20)\d{2}\b", event_raw.strip()):
+        if re.search(
+            r"pan|lima|santiago|havana|cartagena|asunci|guaynabo|san juan|"
+            r"toronto|santo domingo|rock hill|san salvador|buenos aires",
+            text,
+            re.I,
+        ):
+            event = "Pan-Americano"
+    if re.search(r"americas?\s+cup|copa das am", event_raw, re.I):
+        event = "Copa das Américas"
+
+    result_m = re.match(
+        r"\s*(Campeão|Campeã|2° lugar|3° lugar|4° lugar|5-8° lugar)\s*(.*)$",
+        rest.strip(),
+        re.I,
+    )
+    if not result_m:
+        return f"{event}:{rest}"
+
+    result_pt = result_m.group(1)
+    paren = re.search(r"\(([^)]*)\)", result_m.group(2))
+    if not paren:
+        return f"{event}: {result_pt}"
+
+    inner = paren.group(1)
+    year = year_from_parts(inner, text) or ""
+    category = "Simples"
+    lower_inner = inner.lower()
+    if "duplas mistas" in lower_inner or "mista" in lower_inner:
+        category = "Duplas mistas"
+    elif "duplas" in lower_inner:
+        category = "Duplas"
+    elif "equipe" in lower_inner:
+        category = "Equipe"
+    elif "simples" in lower_inner:
+        category = "Simples"
+
+    loc_part = inner.split("—")[0] if "—" in inner else inner
+    location = _clean_location_text(loc_part, year)
+    # Se o "local" ainda é o próprio evento, descarta
+    if location and _normalize_identity_location(location) == "":
+        location = ""
+
+    if location and year:
+        return f"{event}: {result_pt} ({location} {year} — {category})"
+    if year:
+        return f"{event}: {result_pt} ({year} — {category})"
+    if location:
+        return f"{event}: {result_pt} ({location} — {category})"
+    return f"{event}: {result_pt}"
+
+
 def _title_identity(title: str) -> tuple[str, str, str, str]:
-    year = year_from_parts(title) or ""
-    lower = title.lower()
-    category = ""
+    text = canonicalize_title(title)
+    year = year_from_parts(text) or ""
+    lower = text.lower()
     if "duplas mistas" in lower or "— mista" in lower:
         category = "mista"
     elif "duplas" in lower:
         category = "duplas"
     elif "equipe" in lower:
         category = "equipe"
-    elif "simples" in lower:
-        category = "simples"
     else:
         category = "simples"
 
-    raw_event = title.split(":", 1)[0].strip() if ":" in title else title
+    raw_event = text.split(":", 1)[0].strip() if ":" in text else text
     event = _normalize_identity_event(raw_event)
     location = ""
-    paren = re.search(r"\(([^)]+)\)", title)
+    paren = re.search(r"\(([^)]+)\)", text)
     if paren:
-        inner = paren.group(1).lower()
-        location = re.sub(r"\b(19|20)\d{2}\b", "", inner).split("—")[0].strip()
-        location = re.sub(r"\s+", " ", location).strip(" ,")
+        loc_part = paren.group(1).split("—")[0]
+        location = _normalize_identity_location(loc_part)
     return (event, year, location, category)
+
+
+def _compatible_identity_key(
+    best: dict[tuple[str, str, str, str], tuple[int, str]],
+    key: tuple[str, str, str, str],
+) -> tuple[str, str, str, str]:
+    """Unifica chaves com mesmo evento/ano/categoria quando um local está vazio."""
+    event, year, loc, cat = key
+    if loc:
+        empty = (event, year, "", cat)
+        if empty in best:
+            return empty
+        return key
+    for existing in best:
+        if existing[0] == event and existing[1] == year and existing[3] == cat and existing[2]:
+            return existing
+    return key
 
 
 def _title_priority(title: str) -> int:
     lower = title.lower()
+    score = 0
     if "campeão" in lower or "campeã" in lower:
-        return 4
-    if "2° lugar" in lower or "prata" in lower:
-        return 3
-    if "3° lugar" in lower or "bronze" in lower:
-        return 2
-    if "4° lugar" in lower or "5-8" in lower:
-        return 1
-    return 0
+        score = 4
+    elif "2° lugar" in lower or "prata" in lower:
+        score = 3
+    elif "3° lugar" in lower or "bronze" in lower:
+        score = 2
+    elif "4° lugar" in lower or "5-8" in lower:
+        score = 1
+    score *= 100
+    score += max(0, 80 - len(title))
+    paren_part = lower.split("(", 1)[-1] if "(" in lower else ""
+    if "wtt contender" in paren_part or "wtt star contender" in paren_part:
+        score -= 20
+    if re.search(r"\b((?:19|20)\d{2})\s+\1\b", title):
+        score -= 30
+    if "table tennis at the" in lower:
+        score -= 40
+    # Prefere título com cidade no parêntese
+    if re.search(r"\([A-Za-zÀ-ÿ].*\d{4}", title):
+        score += 15
+    return score
 
 
 def merge_titles(*sources: list[str]) -> list[str]:
@@ -1115,25 +1284,33 @@ def merge_titles(*sources: list[str]) -> list[str]:
 
     for source in sources:
         for raw in source:
-            text = translate_highlight(clean_wiki_text(raw.strip()))
-            if _is_junk_title(text):
+            text = canonicalize_title(raw)
+            if not text or _is_junk_title(text):
                 continue
             if _is_generic_card_highlight(text):
                 continue
             if _is_invalid_macau_2025_world_cup_title(text):
                 text = re.sub(r"^Copa do Mundo:", "WTT Champions:", text, count=1)
+                text = canonicalize_title(text)
 
-            key = _title_identity(text)
+            key = _compatible_identity_key(best, _title_identity(text))
             priority = _title_priority(text)
             if key not in best:
                 order.append(key)
                 best[key] = (priority, text)
             elif priority > best[key][0]:
                 best[key] = (priority, text)
+            # Se achamos local concreto e a chave era vazia, promove a chave
+            new_id = _title_identity(text)
+            if new_id[2] and key[2] == "" and new_id[:2] + ("",) + new_id[3:] == key:
+                # Mantém sob a chave vazia mas com texto melhor (já feito via priority)
+                pass
 
     seen_text: set[str] = set()
     merged: list[str] = []
     for key in order:
+        if key not in best:
+            continue
         text = best[key][1]
         if text in seen_text:
             continue

@@ -1,0 +1,38 @@
+{
+  "_comment": "Títulos nacionais CBTM confirmados (notícias oficiais CBTM + Wikipedia PT). Formato: Nacional: Resultado (Evento Ano — Categoria)",
+  "by_ittf_id": {
+    "115641": {
+      "name": "Hugo CALDERANO",
+      "titles": [
+        "Nacional: Campeão (Campeonato Brasileiro 2014 — Simples)"
+      ]
+    },
+    "123031": {
+      "name": "Guilherme TEODORO",
+      "titles": [
+        "Nacional: Campeão (Brasileirão Verão Absoluto A 2025 — Simples)",
+        "Nacional: 2° lugar (Campeonato Brasileiro TMB Platinum 2023 — Simples)"
+      ]
+    },
+    "144891": {
+      "name": "Leonardo IIZUKA",
+      "titles": [
+        "Nacional: Campeão (TMB Platinum Ciclo II Rio de Janeiro 2023 — Simples)"
+      ]
+    },
+    "205717": {
+      "name": "Allan SARMENTO",
+      "titles": [
+        "Nacional: Campeão (TMB Platinum Chapecó Absoluto A 2024 — Simples)",
+        "Nacional: Melhor do Ranking (Ranking Nacional Olímpico Absoluto A 2024)"
+      ]
+    },
+    "105819": {
+      "name": "Valesca MARANHAO",
+      "titles": [
+        "Nacional: Melhor do Ranking (Ranking Nacional Olímpico Absoluto A 2024)",
+        "Nacional: 1ª colocada (Ranking nacional feminino 2024 — Simples)"
+      ]
+    }
+  }
+}
