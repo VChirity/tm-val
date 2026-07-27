@@ -152,7 +152,10 @@ class WttSyncService {
         final name = row['PlayerName']?.toString() ?? '';
         final key = _athleteKey(name, gender);
         final existing = existingByKey[key];
-        final record = _buildAthleteRecordFast(row, gender, existing);
+        final record = _preserveManualFields(
+          _buildAthleteRecordFast(row, gender, existing),
+          existing,
+        );
 
         if (_recordChangedFast(existing, record)) {
           changedCount++;
@@ -197,11 +200,42 @@ class WttSyncService {
 
   Future<List<Map<String, dynamic>>> _fetchExistingAthletes() async {
     final rows = await _client.from('athletes').select(
-      'name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,profile_hydrated',
+      'name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,profile_hydrated,short_bio,manual_fields',
     );
     return (rows as List)
         .map((row) => Map<String, dynamic>.from(row as Map))
         .toList();
+  }
+
+  bool _isManualField(Map<String, dynamic>? existing, String field) {
+    final mf = existing?['manual_fields'];
+    if (mf is! Map) return false;
+    return mf[field] == true;
+  }
+
+  Map<String, dynamic> _preserveManualFields(
+    Map<String, dynamic> record,
+    Map<String, dynamic>? existing,
+  ) {
+    if (existing == null) return record;
+    const fields = [
+      'age',
+      'height',
+      'hand',
+      'ranking_points',
+      'short_bio',
+      'photo_url',
+    ];
+    final out = Map<String, dynamic>.from(record);
+    for (final field in fields) {
+      if (_isManualField(existing, field)) {
+        out[field] = existing[field];
+      }
+    }
+    if (existing['manual_fields'] != null) {
+      out['manual_fields'] = existing['manual_fields'];
+    }
+    return out;
   }
 
   bool _recordChangedFast(

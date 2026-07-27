@@ -68,6 +68,43 @@ function photoFromRankingRow(row: Record<string, unknown>): string | null {
   return normalizePhotoUrl(candidate);
 }
 
+/** Campos da ficha que o usuário pode travar via athletes.manual_fields. */
+const MANUAL_PROFILE_FIELDS = [
+  "age",
+  "height",
+  "hand",
+  "ranking_points",
+  "short_bio",
+  "photo_url",
+] as const;
+
+function isManualField(
+  existing: Record<string, unknown> | undefined,
+  field: string,
+): boolean {
+  const mf = existing?.manual_fields;
+  if (mf == null || typeof mf !== "object" || Array.isArray(mf)) return false;
+  return (mf as Record<string, unknown>)[field] === true;
+}
+
+/** Mantém valores manuais e o mapa manual_fields no payload de upsert. */
+function preserveManualFields(
+  record: Record<string, unknown>,
+  existing?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!existing) return record;
+  const out = { ...record };
+  for (const field of MANUAL_PROFILE_FIELDS) {
+    if (isManualField(existing, field)) {
+      out[field] = existing[field] ?? null;
+    }
+  }
+  if (existing.manual_fields != null) {
+    out.manual_fields = existing.manual_fields;
+  }
+  return out;
+}
+
 function recordChangedFast(
   existing: Record<string, unknown> | undefined,
   record: Record<string, unknown>,
@@ -431,7 +468,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: existingRows, error: fetchErr } = await supabase.from("athletes")
       .select(
-        "name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,profile_hydrated",
+        "name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,profile_hydrated,short_bio,manual_fields",
       );
     if (fetchErr) throw fetchErr;
 
@@ -460,9 +497,12 @@ Deno.serve(async (req: Request) => {
         const name = String(target.row.PlayerName ?? "");
         const key = athleteKey(name, target.gender);
         const existing = existingByKey.get(key);
-        const record = buildAthleteRecordFast(
-          target.row,
-          target.gender,
+        const record = preserveManualFields(
+          buildAthleteRecordFast(
+            target.row,
+            target.gender,
+            existing,
+          ),
           existing,
         );
 
@@ -518,9 +558,12 @@ Deno.serve(async (req: Request) => {
         lastAthleteName = name;
         const key = athleteKey(name, target.gender);
         const existing = existingByKey.get(key);
-        const record = await buildAthleteRecordTitles(
-          target.row,
-          target.gender,
+        const record = preserveManualFields(
+          await buildAthleteRecordTitles(
+            target.row,
+            target.gender,
+            existing,
+          ),
           existing,
         );
 
@@ -576,14 +619,21 @@ Deno.serve(async (req: Request) => {
     let lastAthleteName: string | null = null;
 
     for (const target of batchTargets) {
-      const record = await buildAthleteRecordFull(target.row, target.gender);
+      const keyGuess = athleteKey(
+        String(target.row.PlayerName ?? ""),
+        target.gender,
+      );
+      const existingGuess = existingByKey.get(keyGuess);
+      const built = await buildAthleteRecordFull(target.row, target.gender);
+      const key = athleteKey(
+        String(built.name ?? ""),
+        String(built.gender ?? ""),
+      );
+      const existing = existingByKey.get(key) ?? existingGuess;
+      const record = preserveManualFields(built, existing);
       lastAthleteName = String(record.name ?? "");
 
-      const key = athleteKey(
-        String(record.name ?? ""),
-        String(record.gender ?? ""),
-      );
-      if (recordChangedFull(existingByKey.get(key), record)) {
+      if (recordChangedFull(existing, record)) {
         changedCount++;
       }
       athletes.push(record);

@@ -112,6 +112,70 @@ class AthleteRepository {
     await _client.from('athlete_notes').delete().eq('id', noteId);
   }
 
+  /// Atualiza a ficha técnica e marca os campos alterados em [manual_fields]
+  /// para que o sync WTT não os sobrescreva.
+  Future<Athlete> updateAthleteProfile({
+    required String athleteId,
+    int? rankingPoints,
+    int? age,
+    double? height,
+    String? hand,
+    String? shortBio,
+    required Set<String> editedFields,
+  }) async {
+    final current = await _client
+        .from('athletes')
+        .select('manual_fields')
+        .eq('id', athleteId)
+        .single();
+
+    final mergedManual = <String, dynamic>{};
+    final existingManual = current['manual_fields'];
+    if (existingManual is Map) {
+      for (final entry in existingManual.entries) {
+        if (entry.value == true) {
+          mergedManual[entry.key.toString()] = true;
+        }
+      }
+    }
+    for (final field in editedFields) {
+      mergedManual[field] = true;
+    }
+
+    final payload = <String, dynamic>{
+      'manual_fields': mergedManual,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    if (editedFields.contains('ranking_points')) {
+      payload['ranking_points'] = rankingPoints;
+    }
+    if (editedFields.contains('age')) {
+      payload['age'] = age;
+    }
+    if (editedFields.contains('height')) {
+      payload['height'] = height;
+    }
+    if (editedFields.contains('hand')) {
+      payload['hand'] = hand;
+    }
+    if (editedFields.contains('short_bio')) {
+      payload['short_bio'] = shortBio;
+    }
+
+    final row = await _client
+        .from('athletes')
+        .update(payload)
+        .eq('id', athleteId)
+        .select('*')
+        .single();
+
+    final notes = await fetchNotesByAthleteId(athleteId);
+    return Athlete.fromJson(
+      Map<String, dynamic>.from(row),
+      hasNote: notes.isNotEmpty,
+    );
+  }
+
   Future<List<Athlete>> searchAthletes({
     required String query,
     String? excludeId,

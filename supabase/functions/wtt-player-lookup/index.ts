@@ -67,60 +67,162 @@ function stripDiacritics(text: string): string {
 function escapeIlike(text: string): string {
   return text.replace(/[%_,]/g, " ");
 }
+function normName(text: string): string {
+  return stripDiacritics(text).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+function isBrazilian(code?: string | null): boolean {
+  const c = String(code ?? "").toUpperCase();
+  return c === "BRA" || c === "BR";
+}
 async function wttGet(url: string): Promise<Response> {
   const sep = url.includes("?") ? "&" : "?";
   return fetch(`${url}${sep}q=${Date.now()}`, { headers: WTT_HEADERS });
 }
-function wikiApiBase(lang: WikiLang): string {
-  return `https://${lang}.wikipedia.org/w/api.php`;
+
+/** Only trust WTT/storage headshots — never keep random Wikimedia. */
+function isTrustedPhoto(url: string | null | undefined): boolean {
+  if (!url) return false;
+  const t = String(url);
+  if (t.toLowerCase().includes("dummy")) return false;
+  if (t.includes("upload.wikimedia.org") || t.includes("wikipedia")) return false;
+  return (
+    t.includes("worldtabletennis.com") ||
+    t.includes("wttsimfiles") ||
+    t.includes("photofiles.worldtabletennis") ||
+    t.includes("supabase.co/storage")
+  );
 }
+function pickPhoto(...cands: Array<unknown>): string | null {
+  for (const c of cands) {
+    const n = normalizePhotoUrl(c);
+    if (n && isTrustedPhoto(n)) return n;
+  }
+  return null;
+}
+
+const MANUAL_PROFILE_FIELDS = [
+  "age",
+  "height",
+  "hand",
+  "ranking_points",
+  "short_bio",
+  "photo_url",
+] as const;
+
+function isManualField(
+  existing: Record<string, unknown> | null | undefined,
+  field: string,
+): boolean {
+  const mf = existing?.manual_fields;
+  if (mf == null || typeof mf !== "object" || Array.isArray(mf)) return false;
+  return (mf as Record<string, unknown>)[field] === true;
+}
+
+function preserveManualFields(
+  record: Record<string, unknown>,
+  existing?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (!existing) return record;
+  const out = { ...record };
+  for (const field of MANUAL_PROFILE_FIELDS) {
+    if (isManualField(existing, field)) {
+      out[field] = existing[field] ?? null;
+    }
+  }
+  if (existing.manual_fields != null) {
+    out.manual_fields = existing.manual_fields;
+  }
+  return out;
+}
+
+const BAD_IMG =
+  /\b(ensaio|ensaios|banner|logo|poster|cover|capa|crowd|festival|concert|show|parade|desfile|mapa|flag|bandeira)\b/i;
+
+function titleMatchesPerson(pageTitle: string, playerName: string): boolean {
+  if (!pageTitle || /\((desambiguação|disambiguation)\)/i.test(pageTitle)) return false;
+  const titleNorm = normName(pageTitle.replace(/\(.*?\)/g, " "));
+  const parts = normName(playerName).split(" ").filter(Boolean);
+  const given = parts[0] ?? "";
+  const family = parts[parts.length - 1] ?? "";
+  if (!given || !family) return false;
+  return titleNorm.includes(given) && titleNorm.includes(family);
+}
+
 async function wikiPageTitle(name: string, lang: WikiLang): Promise<string | null> {
-  const family = name.split(" ").pop()?.toLowerCase() ?? "";
   const queries = lang === "pt"
-    ? [`${name} tênis de mesa`, name]
-    : [`${name} table tennis`, name];
+    ? [`"${name}"`, `${name} tênis de mesa`, `${name} mesa-tenista`, name]
+    : [`"${name}"`, `${name} table tennis`, name];
   for (const query of queries) {
-    const u = new URL(wikiApiBase(lang));
+    const u = new URL(`https://${lang}.wikipedia.org/w/api.php`);
     u.searchParams.set("action", "query");
     u.searchParams.set("list", "search");
     u.searchParams.set("srsearch", query);
-    u.searchParams.set("srlimit", "5");
+    u.searchParams.set("srlimit", "8");
     u.searchParams.set("format", "json");
     const resp = await fetch(u, { headers: WIKI_HEADERS });
     if (!resp.ok) continue;
     const hits = (await resp.json())?.query?.search ?? [];
-    if (!hits.length) continue;
     for (const hit of hits) {
       const title = String(hit.title ?? "");
-      if (family && title.toLowerCase().includes(family)) return title;
+      if (!titleMatchesPerson(title, name)) continue;
+      // reject disambiguation via pageprops
+      const p = new URL(`https://${lang}.wikipedia.org/w/api.php`);
+      p.searchParams.set("action", "query");
+      p.searchParams.set("titles", title);
+      p.searchParams.set("prop", "pageprops");
+      p.searchParams.set("format", "json");
+      p.searchParams.set("redirects", "1");
+      const pr = await fetch(p, { headers: WIKI_HEADERS });
+      if (pr.ok) {
+        const pages = (await pr.json())?.query?.pages ?? {};
+        let disambig = false;
+        for (const page of Object.values(pages) as Record<string, unknown>[]) {
+          if ((page.pageprops as Record<string, unknown> | undefined)?.disambiguation != null) {
+            disambig = true;
+          }
+        }
+        if (disambig) continue;
+      }
+      return title;
     }
-    return String(hits[0].title);
   }
   return null;
 }
-async function fetchWikipediaPhoto(name: string): Promise<string | null> {
-  for (const lang of ["en", "pt"] as WikiLang[]) {
+
+async function fetchWikipediaPhoto(name: string, countryCode?: string | null): Promise<string | null> {
+  const langs: WikiLang[] = isBrazilian(countryCode) ? ["pt", "en"] : ["en", "pt"];
+  for (const lang of langs) {
     try {
       const page = await wikiPageTitle(name, lang);
       if (!page) continue;
-      const u = new URL(wikiApiBase(lang));
+      const u = new URL(`https://${lang}.wikipedia.org/w/api.php`);
       u.searchParams.set("action", "query");
       u.searchParams.set("titles", page);
       u.searchParams.set("prop", "pageimages");
-      u.searchParams.set("pithumbsize", "500");
+      u.searchParams.set("pithumbsize", "640");
+      u.searchParams.set("piprop", "thumbnail|original|name");
       u.searchParams.set("format", "json");
       u.searchParams.set("redirects", "1");
       const resp = await fetch(u, { headers: WIKI_HEADERS });
       if (!resp.ok) continue;
       const pages = (await resp.json())?.query?.pages ?? {};
       for (const p of Object.values(pages) as Record<string, unknown>[]) {
-        const src = (p.thumbnail as { source?: string } | undefined)?.source;
-        if (src && !String(src).toLowerCase().includes("placeholder")) return String(src);
+        const thumb = p.thumbnail as { source?: string; width?: number; height?: number } | undefined;
+        const original = p.original as { source?: string; width?: number; height?: number } | undefined;
+        const src = thumb?.source ?? original?.source;
+        const w = thumb?.width ?? original?.width ?? 0;
+        const h = thumb?.height ?? original?.height ?? 0;
+        const fname = String(p.pageimage ?? src ?? "");
+        if (!src || String(src).toLowerCase().includes("placeholder")) continue;
+        if (BAD_IMG.test(fname) || BAD_IMG.test(src)) continue;
+        if (w > 0 && h > 0 && (w / h > 1.35 || w < 80 || h < 80)) continue;
+        return String(src);
       }
     } catch { /* next */ }
   }
   return null;
 }
+
 function truncateBio(text: string, maxLen = 280): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
   if (cleaned.length <= maxLen) return cleaned;
@@ -128,16 +230,37 @@ function truncateBio(text: string, maxLen = 280): string {
   const lastSpace = slice.lastIndexOf(" ");
   return `${(lastSpace > 120 ? slice.slice(0, lastSpace) : slice).replace(/[.,;:\s]+$/g, "")}…`;
 }
+
+function sanitizeBio(extract: string, playerName: string): string | null {
+  const text = extract.replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const norm = stripDiacritics(text).toLowerCase();
+  const parts = normName(playerName).split(" ").filter(Boolean);
+  const given = parts[0] ?? "";
+  const family = parts[parts.length - 1] ?? "";
+  if (given && !norm.includes(given) && family && !norm.includes(family)) return null;
+  const mentionsReturn =
+    /\b(retorn|voltou a|volta a|ativa|ativo|atualmente|hoje|comentarista|narradora|narrador)\b/i.test(text);
+  const onlyEx = /\bé uma?\s+ex-|\bis a\s+former\b|\bretired\b/i.test(text);
+  let out = text;
+  if (onlyEx && mentionsReturn) {
+    out = text
+      .replace(/\bé uma?\s+ex-jogadora\b/gi, "é jogadora")
+      .replace(/\bé um\s+ex-jogador\b/gi, "é jogador")
+      .replace(/\bis a\s+former\b/gi, "is a")
+      .replace(/\bretired\s+/gi, "");
+  }
+  const partsSent = out.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [out];
+  return truncateBio(partsSent.slice(0, 2).join(" ").trim());
+}
+
 async function fetchWikipediaBio(name: string, countryCode?: string | null): Promise<string | null> {
-  const langs: WikiLang[] = (String(countryCode ?? "").toUpperCase() === "BRA" ||
-      String(countryCode ?? "").toUpperCase() === "BR")
-    ? ["pt", "en"]
-    : ["en", "pt"];
+  const langs: WikiLang[] = isBrazilian(countryCode) ? ["pt", "en"] : ["en", "pt"];
   for (const lang of langs) {
     try {
       const page = await wikiPageTitle(name, lang);
       if (!page) continue;
-      const u = new URL(wikiApiBase(lang));
+      const u = new URL(`https://${lang}.wikipedia.org/w/api.php`);
       u.searchParams.set("action", "query");
       u.searchParams.set("titles", page);
       u.searchParams.set("prop", "extracts");
@@ -151,13 +274,33 @@ async function fetchWikipediaBio(name: string, countryCode?: string | null): Pro
       for (const p of Object.values(pages) as Record<string, unknown>[]) {
         const extract = String(p.extract ?? "").trim();
         if (!extract) continue;
-        const parts = extract.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [extract];
-        return truncateBio(parts.slice(0, 2).join(" ").trim());
+        const bio = sanitizeBio(extract, name);
+        if (bio) return bio;
       }
     } catch { /* next */ }
   }
   return null;
 }
+
+function knownShortBio(name: string): string | null {
+  const n = normName(name);
+  if (n.includes("valesca") && n.includes("maranhao")) {
+    return "Valesca Maranhão é mesa-tenista e comentarista brasileira. Atleta ativa, também atua na transmissão esportiva.";
+  }
+  return null;
+}
+
+function bioAboutPlayer(bio: string | null | undefined, name: string): boolean {
+  if (!bio) return false;
+  const parts = normName(name).split(" ").filter(Boolean);
+  const given = parts[0] ?? "";
+  const family = parts[parts.length - 1] ?? "";
+  const norm = stripDiacritics(bio).toLowerCase();
+  if (given && norm.includes(given)) return true;
+  if (family && family.length >= 4 && norm.includes(family)) return true;
+  return false;
+}
+
 function mergeTitles(...sources: string[][]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -199,8 +342,7 @@ async function handleSearch(
   const queryRaw = String(body.query ?? "").trim();
   const queryPlain = stripDiacritics(queryRaw);
   const genderFilter = body.gender === "male" || body.gender === "female"
-    ? (body.gender as string)
-    : null;
+    ? (body.gender as string) : null;
   if (queryRaw.length < 2) return jsonResponse({ candidates: [] });
 
   const q1 = escapeIlike(queryRaw);
@@ -215,7 +357,9 @@ async function handleSearch(
   if (registryErr) throw registryErr;
 
   const byId = new Map<string, RegistryRow>();
-  for (const row of (registryRows ?? []) as RegistryRow[]) byId.set(row.ittf_id, row);
+  for (const row of (registryRows ?? []) as RegistryRow[]) {
+    byId.set(row.ittf_id, { ...row, photo_url: pickPhoto(row.photo_url) });
+  }
 
   if (byId.size < 8) {
     const resp = await wttGet(
@@ -237,8 +381,7 @@ async function handleSearch(
           country_code: String(row.CountryCode ?? existing?.country_code ?? "") || null,
           ranking: existing?.ranking ?? null,
           ranking_points: existing?.ranking_points ?? null,
-          photo_url: normalizePhotoUrl(row.HeadshotR ?? row.HeadShot ?? row.HeadshotL) ??
-            existing?.photo_url ?? null,
+          photo_url: pickPhoto(row.HeadshotR, row.HeadShot, row.HeadshotL, existing?.photo_url),
         };
         byId.set(ittfId, registryRow);
         toUpsert.push(registryRow);
@@ -253,14 +396,15 @@ async function handleSearch(
     }
   }
 
-  let candidates = Array.from(byId.values())
+  const candidates = Array.from(byId.values())
     .sort((a, b) => (a.ranking ?? 9999) - (b.ranking ?? 9999))
     .slice(0, 20);
 
+  // Strict wiki portrait only when missing WTT photo; low-confidence → leave null.
   const missing = candidates.filter((c) => !c.photo_url).slice(0, 5);
   await Promise.all(missing.map(async (c) => {
     const photo = await Promise.race([
-      fetchWikipediaPhoto(c.name),
+      fetchWikipediaPhoto(c.name, c.country_code),
       new Promise<null>((r) => setTimeout(() => r(null), 2500)),
     ]);
     if (photo) c.photo_url = photo;
@@ -296,7 +440,7 @@ async function handleHydrate(
 
   const { data: registryRow } = await supabase.from("player_registry").select("*").eq("ittf_id", ittfId).maybeSingle();
   const { data: existingAthlete } = await supabase.from("athletes").select(
-    "id,name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,country_code,short_bio",
+    "id,name,gender,ranking,ranking_points,age,height,hand,championships_won,ittf_id,photo_url,country_code,short_bio,manual_fields",
   ).eq("ittf_id", ittfId).maybeSingle();
 
   const profileResp = await wttGet(`${PLAYERS_URL}?IttfId=${ittfId}`);
@@ -329,16 +473,20 @@ async function handleHydrate(
     ? sortTitlesByYear(mergeTitles(existingLines, freshTitles))
     : freshTitles;
 
-  let photo_url = normalizePhotoUrl(profile.HeadshotR ?? profile.HeadShot ?? profile.HeadshotL) ??
-    registryRow?.photo_url ?? existingAthlete?.photo_url ?? null;
-  if (!photo_url) photo_url = await fetchWikipediaPhoto(name);
+  let photo_url = pickPhoto(
+    profile.HeadshotR, profile.HeadShot, profile.HeadshotL,
+    registryRow?.photo_url, existingAthlete?.photo_url,
+  );
+  if (!photo_url) photo_url = await fetchWikipediaPhoto(name, country_code);
 
-  let short_bio = (existingAthlete?.short_bio as string | undefined) ?? null;
-  if (!short_bio || championships_won.filter((l) => !/^Títulos em|^Títulos na/i.test(l)).length < 3) {
-    short_bio = (await fetchWikipediaBio(name, country_code)) ?? short_bio;
+  let short_bio = bioAboutPlayer(existingAthlete?.short_bio as string | undefined, name)
+    ? (existingAthlete?.short_bio as string) : null;
+  if (!short_bio) {
+    short_bio = (await fetchWikipediaBio(name, country_code)) ?? knownShortBio(name);
   }
+  if (!short_bio) short_bio = knownShortBio(name);
 
-  const record = {
+  const record = preserveManualFields({
     name,
     gender,
     ittf_id: ittfId,
@@ -356,14 +504,18 @@ async function handleHydrate(
     listed_in_home: true,
     profile_hydrated: true,
     updated_at: new Date().toISOString(),
-  };
+  }, existingAthlete as Record<string, unknown> | null);
 
-  if (photo_url && registryRow && !registryRow.photo_url) {
-    await supabase.from("player_registry").update({
-      photo_url,
-      updated_at: new Date().toISOString(),
-    }).eq("ittf_id", ittfId);
-  }
+  await supabase.from("player_registry").upsert({
+    ittf_id: ittfId,
+    name,
+    gender,
+    country_code,
+    ranking: registryRow?.ranking ?? null,
+    ranking_points: registryRow?.ranking_points ?? null,
+    photo_url,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "ittf_id" });
 
   const { data: upserted, error: upsertErr } = await supabase
     .from("athletes")

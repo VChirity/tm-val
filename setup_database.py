@@ -29,9 +29,11 @@ CREATE TABLE IF NOT EXISTS athletes (
     championships_won TEXT[] DEFAULT '{}',
     ittf_id TEXT,
     photo_url TEXT,
+    short_bio TEXT,
     country_code TEXT,
     listed_in_home BOOLEAN NOT NULL DEFAULT true,
     profile_hydrated BOOLEAN NOT NULL DEFAULT true,
+    manual_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT athletes_name_gender_key UNIQUE (name, gender)
 );
@@ -203,6 +205,12 @@ def main() -> None:
                 )
                 cursor.execute(
                     "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS profile_hydrated BOOLEAN NOT NULL DEFAULT true;"
+                )
+                cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS short_bio TEXT;"
+                )
+                cursor.execute(
+                    "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS manual_fields jsonb NOT NULL DEFAULT '{}'::jsonb;"
                 )
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS athletes_ittf_id_idx ON athletes (ittf_id);"

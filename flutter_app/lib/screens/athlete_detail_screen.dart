@@ -23,6 +23,10 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   final _h2hService = WttHeadToHeadService();
   final _newNoteController = TextEditingController();
   final _opponentSearchController = TextEditingController();
+  final _pointsController = TextEditingController();
+  final _ageController = TextEditingController();
+  final _heightController = TextEditingController();
+  final _bioController = TextEditingController();
 
   Athlete? _athlete;
   List<AthleteNote> _notes = [];
@@ -32,6 +36,9 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
   bool _isSaving = false;
   String? _errorMessage;
   bool _notesChanged = false;
+  bool _editingFicha = false;
+  String? _editHand;
+  bool _profileChanged = false;
 
   int? _fromYear;
   TitleCategory _titleCategory = TitleCategory.all;
@@ -51,7 +58,159 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
     _newNoteController.dispose();
     _editNoteController.dispose();
     _opponentSearchController.dispose();
+    _pointsController.dispose();
+    _ageController.dispose();
+    _heightController.dispose();
+    _bioController.dispose();
     super.dispose();
+  }
+
+  void _fillFichaControllers(Athlete athlete) {
+    _pointsController.text =
+        athlete.rankingPoints != null ? '${athlete.rankingPoints}' : '';
+    _ageController.text = athlete.age != null ? '${athlete.age}' : '';
+    _heightController.text = athlete.height != null
+        ? athlete.height!.toStringAsFixed(2)
+        : '';
+    _bioController.text = athlete.shortBio?.trim() ?? '';
+    _editHand = _normalizeHandValue(athlete.hand);
+  }
+
+  String? _normalizeHandValue(String? hand) {
+    if (hand == null || hand.trim().isEmpty) return null;
+    final normalized = hand.toLowerCase();
+    if (normalized.contains('right') ||
+        normalized == 'r' ||
+        normalized.contains('destro')) {
+      return 'Right';
+    }
+    if (normalized.contains('left') ||
+        normalized == 'l' ||
+        normalized.contains('canhot')) {
+      return 'Left';
+    }
+    if (normalized.contains('both') || normalized.contains('amb')) {
+      return 'Ambidextrous';
+    }
+    return hand;
+  }
+
+  void _startEditingFicha() {
+    final athlete = _athlete;
+    if (athlete == null) return;
+    _fillFichaControllers(athlete);
+    setState(() => _editingFicha = true);
+  }
+
+  void _cancelEditingFicha() {
+    setState(() => _editingFicha = false);
+  }
+
+  Future<void> _saveFicha() async {
+    final athlete = _athlete;
+    if (athlete == null) return;
+
+    final pointsText = _pointsController.text.trim();
+    final ageText = _ageController.text.trim();
+    final heightText = _heightController.text.trim().replaceAll(',', '.');
+    final bioText = _bioController.text.trim();
+
+    int? rankingPoints;
+    if (pointsText.isNotEmpty) {
+      rankingPoints = int.tryParse(pointsText);
+      if (rankingPoints == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pontuação inválida.')),
+        );
+        return;
+      }
+    }
+
+    int? age;
+    if (ageText.isNotEmpty) {
+      age = int.tryParse(ageText);
+      if (age == null || age < 5 || age > 120) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Idade inválida.')),
+        );
+        return;
+      }
+    }
+
+    double? height;
+    if (heightText.isNotEmpty) {
+      height = double.tryParse(heightText);
+      if (height == null || height < 1.0 || height > 2.5) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Altura inválida. Use metros (ex.: 1.75).'),
+          ),
+        );
+        return;
+      }
+    }
+
+    final edited = <String>{};
+    if (rankingPoints != athlete.rankingPoints) {
+      edited.add('ranking_points');
+    }
+    if (age != athlete.age) edited.add('age');
+    final currentHeight = athlete.height;
+    final heightChanged = height == null && currentHeight != null ||
+        height != null && currentHeight == null ||
+        (height != null &&
+            currentHeight != null &&
+            (height - currentHeight).abs() > 0.001);
+    if (heightChanged) edited.add('height');
+    if (_editHand != _normalizeHandValue(athlete.hand)) {
+      edited.add('hand');
+    }
+    if (bioText != (athlete.shortBio?.trim() ?? '')) {
+      edited.add('short_bio');
+    }
+
+    if (edited.isEmpty) {
+      setState(() => _editingFicha = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nenhuma alteração para salvar.')),
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+
+    try {
+      final updated = await _repository.updateAthleteProfile(
+        athleteId: widget.athleteId,
+        rankingPoints: rankingPoints,
+        age: age,
+        height: height,
+        hand: _editHand,
+        shortBio: bioText.isEmpty ? null : bioText,
+        editedFields: edited,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _athlete = updated.copyWith(hasNote: _notes.isNotEmpty);
+        _editingFicha = false;
+        _isSaving = false;
+        _profileChanged = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ficha técnica salva. Valores manuais serão mantidos no Atualizar.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao salvar ficha: $error')),
+      );
+    }
   }
 
   Future<void> _loadData() async {
@@ -461,6 +620,10 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
                       value: TitleCategory.nacional,
                       child: Text('Nacionais'),
                     ),
+                    DropdownMenuItem(
+                      value: TitleCategory.panAm,
+                      child: Text('Pan-Am'),
+                    ),
                   ],
                   onChanged: (value) {
                     if (value != null) {
@@ -605,9 +768,196 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
     );
   }
 
-  Widget _buildProfile(Athlete athlete) {
+  Widget _buildEditableField({
+    required String label,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    String? hint,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: !_isSaving,
+              keyboardType: keyboardType,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: hint,
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFichaSection(Athlete athlete) {
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
 
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Ficha técnica',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                if (!_editingFicha)
+                  IconButton(
+                    tooltip: 'Editar ficha técnica',
+                    onPressed: _isSaving ? null : _startEditingFicha,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+              ],
+            ),
+            const Divider(),
+            if (_editingFicha) ...[
+              _buildInfoRow('Gênero', PtBr.genderLabel(athlete.gender)),
+              _buildEditableField(
+                label: 'Pontuação',
+                controller: _pointsController,
+                keyboardType: TextInputType.number,
+                hint: 'ex.: 1250',
+              ),
+              _buildEditableField(
+                label: 'Idade',
+                controller: _ageController,
+                keyboardType: TextInputType.number,
+                hint: 'anos',
+              ),
+              _buildEditableField(
+                label: 'Altura',
+                controller: _heightController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                hint: 'metros (ex.: 1.75)',
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 120,
+                      child: Text(
+                        'Mão',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Expanded(
+                      child: DropdownButtonFormField<String?>(
+                        value: _editHand,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('Não informada'),
+                          ),
+                          DropdownMenuItem<String?>(
+                            value: 'Right',
+                            child: Text('Destro'),
+                          ),
+                          DropdownMenuItem<String?>(
+                            value: 'Left',
+                            child: Text('Canhoto'),
+                          ),
+                          DropdownMenuItem<String?>(
+                            value: 'Ambidextrous',
+                            child: Text('Ambidestro'),
+                          ),
+                        ],
+                        onChanged: _isSaving
+                            ? null
+                            : (value) => setState(() => _editHand = value),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Bio curta',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _bioController,
+                enabled: !_isSaving,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  hintText: 'Resumo curto do atleta…',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton.icon(
+                    onPressed: _isSaving ? null : _saveFicha,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_outlined, size: 18),
+                    label: const Text('Salvar'),
+                  ),
+                  TextButton(
+                    onPressed: _isSaving ? null : _cancelEditingFicha,
+                    child: const Text('Cancelar'),
+                  ),
+                ],
+              ),
+            ] else ...[
+              _buildInfoRow('Gênero', PtBr.genderLabel(athlete.gender)),
+              _buildInfoRow(
+                'Pontuação',
+                PtBr.formatRankingPoints(athlete.rankingPoints),
+              ),
+              _buildInfoRow('Idade', PtBr.formatAge(athlete.age)),
+              _buildInfoRow(
+                'Altura',
+                athlete.height != null
+                    ? '${athlete.height!.toStringAsFixed(2)} m'
+                    : 'Não informada',
+              ),
+              _buildInfoRow('Mão', PtBr.handLabel(athlete.hand)),
+              if (athlete.updatedAt != null)
+                _buildInfoRow(
+                  'Atualizado em',
+                  dateFormat.format(athlete.updatedAt!.toLocal()),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfile(Athlete athlete) {
     return ListView(
       padding: EdgeInsets.symmetric(
         horizontal: MediaQuery.sizeOf(context).width < 520 ? 12 : 16,
@@ -632,40 +982,10 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 24),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Ficha técnica',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const Divider(),
-                _buildInfoRow('Gênero', PtBr.genderLabel(athlete.gender)),
-                _buildInfoRow(
-                  'Pontuação',
-                  PtBr.formatRankingPoints(athlete.rankingPoints),
-                ),
-                _buildInfoRow('Idade', PtBr.formatAge(athlete.age)),
-                _buildInfoRow(
-                  'Altura',
-                  athlete.height != null
-                      ? '${athlete.height!.toStringAsFixed(2)} m'
-                      : 'Não informada',
-                ),
-                _buildInfoRow('Mão', PtBr.handLabel(athlete.hand)),
-                if (athlete.updatedAt != null)
-                  _buildInfoRow(
-                    'Atualizado em',
-                    dateFormat.format(athlete.updatedAt!.toLocal()),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        if (athlete.shortBio != null && athlete.shortBio!.trim().isNotEmpty) ...[
+        _buildFichaSection(athlete),
+        if (!_editingFicha &&
+            athlete.shortBio != null &&
+            athlete.shortBio!.trim().isNotEmpty) ...[
           const SizedBox(height: 12),
           Text(
             athlete.shortBio!.trim(),
@@ -690,7 +1010,7 @@ class _AthleteDetailScreenState extends State<AthleteDetailScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
-          Navigator.pop(context, _notesChanged);
+          Navigator.pop(context, _notesChanged || _profileChanged);
         }
       },
       child: Scaffold(
